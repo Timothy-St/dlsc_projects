@@ -25,27 +25,23 @@ class DatasetTask3(Dataset):
 if __name__ == "__main__":
 
     df = pd.read_csv('TrainingData.txt')
-    # input_data = torch.tensor(df[['t', 'tf0', 'ts0']].values, dtype=torch.float)
     input_data = torch.tensor(df[['t', 'tf0']].values, dtype=torch.float)
 
-    # Assuming your input data is a numpy array of shape [210, 3]
+    # input data shape [210, 3] -> get five input/output pairs!
     seq_length = 35
 
-    # Create an instance of the custom dataset
     dataset = DatasetTask3(input_data, seq_length)
 
-    # Create a data loader
-    batch_size = 1  # Set the batch size according to your needs
+    batch_size = 1
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    # Access the data loader
-    for input_seq, output_seq in data_loader:
-        # input_seq has shape [batch_size, seq_length, num_features]
-        # output_seq has shape [batch_size, seq_length, num_features]
+    for input, output in data_loader:
+        # input_seq shape [batch_size, window_len, 2]
+        # output_seq shape [batch_size, window_len, 1]
         print('-------')
-        print(input_seq)
+        print(input)
         print('-------')
-        print(output_seq)
+        print(output)
         print('-------')
 
 
