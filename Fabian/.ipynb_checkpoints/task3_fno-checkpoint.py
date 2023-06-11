@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import os
@@ -8,11 +7,6 @@ import torch.nn.functional as F
 from torch.optim import Adam
 import matplotlib.pyplot as plt
 import pandas as pd
-
-import sys 
-sys.path.append('/Users/timostroschein/Desktop/Deep Learning/Timothy_PA_Y23/Task3')
-
-print(sys.path)
 
 
 class DatasetTask3(TensorDataset):

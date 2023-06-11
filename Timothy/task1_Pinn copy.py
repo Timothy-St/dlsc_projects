@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import torch.optim as optim
 import torch
+import torch.optim as optim
 from torch.utils.data import DataLoader
 import sys 
 sys.path.append('/Users/timostroschein/Desktop/Deep Learning/DLSC')
