@@ -15,8 +15,8 @@ class sin_wrapper(nn.Module):
 
 class NeuralNet_ev(nn.Module):
     # Modified NeuralNet to learn eigenvalue (similar to an inverse problem) and adapted forward function to inherently learn symmetry or antisymmetry solutions. Optimal weight initialization for Sin activation not clear
-    def __init__(self, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed, symmetry=True, activation)
-        super(NeuralNet, self).__init__()
+    def __init__(self, activation, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed,  symmetry=True):
+        super(NeuralNet_ev, self).__init__()
         self.input_dimension = input_dimension
         self.output_dimension = output_dimension    # can extend to approach to higher dimensions 
         self.neurons = neurons
@@ -26,7 +26,8 @@ class NeuralNet_ev(nn.Module):
         self.regularization_exp = regularization_exp
         self.retrain_seed = retrain_seed
         
-        self.symmetry = symmetry # learn symmetric function
+        self.symmetry = symmetry # learn symmetric function 
+        self.activation = activation
         
         self.ev_in = nn.Linear(1,1)     # eigenvalue transformation 
         self.input_layer = nn.Linear(self.input_dimension + 1 ,self.neurons)
@@ -79,14 +80,14 @@ class ev_pinn(nn.Module):
         self.domain_extrema = torch.tensor([xL, xR])
         self.activation=  nn.Tanh()      # or  sin_wrapper()
 
-        self.solution = NeuralNe_env(input_dimension=self.domain_extrema.shape[0], output_dimension=1,
+        self.solution = NeuralNet_ev(self.activation,input_dimension=self.domain_extrema.shape[0], output_dimension=1,
                                               n_hidden_layers=2,
                                               neurons=20,
                                               regularization_param=0.,
                                               regularization_exp=2.,
                                               retrain_seed=42,
-                                              symmetry=True,
-                                              self.activation)
+                                              
+                                              symmetry=True,)
 
 
         # TODO: other hyperparameters...
@@ -96,17 +97,22 @@ class ev_pinn(nn.Module):
         self.training_set = self.assemble_dataset()
         #self.training_pts = self.add_points()
         
-    def assemble_datasets(self):
+    def assemble_dataset(self):
         #TODO 
+        return 0
     
     def parametric_conversion(self):
-        # TODO: 
+        # TODO
+        return 0
     
     def compute_loss(self):
-        
         # TODO: write compute loss function
-
         return 0
+    
+    def fit(self):
+        #TODO 
+        return 0
+    
 
 
     
