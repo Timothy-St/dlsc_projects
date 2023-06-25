@@ -120,10 +120,8 @@ class ev_pinn(nn.Module):
         input_pts = torch.linspace(self.domain_extrema[0], self.domain_extrema[1], self.grid_resol)
         return input_pts.reshape(-1,1)
     
-    def parametric_conversion(self, input_pts):
+    def parametric_conversion(self, input_pts, xL, xR):
         fb = 0.0    # TODO: adapt offset if needed
-        xL = self.domain_extrema[0]
-        xR = self.domain_extrema[1]
         Psi,E = self.solution(input_pts)
         g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))
 
@@ -143,28 +141,33 @@ class ev_pinn(nn.Module):
 
     def compute_loss(self, input_pts):
         input_pts.requires_grad = True
+        
+        xL = self.domain_extrema[0]
+        xR = self.domain_extrema[1]
 
         V = self.potential_sw(input_pts)
 
         # calculate pde loss
-        f, E = self.parametric_conversion(input_pts)
+        f, E = self.parametric_conversion(input_pts, xL, xR)
         grad_f_x = torch.autograd.grad(f.sum(), input_pts, create_graph=True)[0]    # TODO: Check shapes
         grad_f_xx = torch.autograd.grad(grad_f_x.sum(), input_pts, create_graph=True)[0]
 
         pde_residual = grad_f_xx/2 + (E - V)*f
         pde_loss = torch.mean(pde_residual**2)
 
+        # calculate normal loss
+        norm_loss = torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)
+
 
         # TODO: Ortho loss
-        # TODO: Normal loss
 
 
-        return pde_loss
+        return pde_loss, norm_loss
     
     def fit(self):
             
         out_pred, eigenvalue = self.solution(self.training_pts)
-        loss = self.compute_loss(self.training_pts)
+        pde_loss, norm_loss = self.compute_loss(self.training_pts)
     
         return out_pred, eigenvalue
     
