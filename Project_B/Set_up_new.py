@@ -39,6 +39,13 @@ class NeuralNet_ev(nn.Module):
         
         #self.init_xavier()
         
+    def parametric_conversion(self, input_pts, NN_output, xL, xR):
+        fb = 0.0    # TODO: adapt offset if needed
+        Psi,E = self.solution(input_pts)
+        g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))*NN_output
+
+        return fb + g*NN_output
+     
         
     def forward(self, x):
         # changed your forward function slightly and added res_layer. the shapes before did not match and gave errors. Also think they
@@ -61,6 +68,9 @@ class NeuralNet_ev(nn.Module):
         x_neg = self.activation(x_neg)
         x = self.activation(x)
 
+        x = 
+        
+        
         if self.symmetry:
             out = self.output(torch.cat((x + x_neg, eigenvalue), 1))
         else:
