@@ -17,7 +17,7 @@ class sin_wrapper(nn.Module):
 
 class NeuralNet_ev(nn.Module):
     # Modified NeuralNet to learn eigenvalue (similar to an inverse problem) and adapted forward function to inherently learn symmetry or antisymmetry solutions. Optimal weight initialization for Sin activation not clear
-    def __init__(self, activation,domain_extrema, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed,  symmetry=True):
+    def __init__(self, activation,domain_extrema, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed,  symmetry):
         super(NeuralNet_ev, self).__init__()
         self.input_dimension = input_dimension
         self.output_dimension = output_dimension    # can extend to approach to higher dimensions 
@@ -39,7 +39,7 @@ class NeuralNet_ev(nn.Module):
         self.res_layer = nn.Linear(self.neurons, self.neurons)    # They feed in eigenvalues right before output layer
         self.output = nn.Linear(self.neurons, 1)
         
-        #self.init_xavier()
+        #self.init_xavier()    causes trouble with symmetrization, assume that initializes a linear NN -> x + x_neg = 0
         
     def parametric_conversion(self, input_pts, NN_output):
         xL = self.domain_extrema[0]
@@ -47,8 +47,7 @@ class NeuralNet_ev(nn.Module):
         L = xR- xL
         
         fb = 0.0    # TODO: adapt offset if needed
-        #g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))*NN_output
-        g = (1 - torch.cos(np.pi/L  * (input_pts - xL))**2 )*NN_output
+        g = (1 - torch.cos(np.pi/L  * (input_pts - xL)).pow(2) )* NN_output  #g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))*NN_output
         
         return fb + g*NN_output
      
@@ -72,14 +71,15 @@ class NeuralNet_ev(nn.Module):
         x_neg_out= self.activation(self.output(x_neg))
         x_out= self.activation(self.output(x))
         
-        x_neg_out_para= self.parametric_conversion(input_pts,x_neg_out)
-        x_out_para= self.parametric_conversion(input_pts,x_out)
+        # x_neg_out= self.parametric_conversion(input_pts,x_neg_out)
+        # x_out= self.parametric_conversion(input_pts,x_out)
 
         if self.symmetry:
-            out = x_out_para + x_neg_out_para
+            out = x_out + x_neg_out
         else:
-            out =x_out_para - x_neg_out_para
-            
+            out = x_out - x_neg_out
+        
+        out = self.parametric_conversion(input_pts,out)
         return out, eigenvalue
     
     def init_xavier(self):
@@ -98,13 +98,13 @@ class NeuralNet_ev(nn.Module):
         
 class ev_pinn(nn.Module):
 
-    def __init__(self, neurons, xL, xR, grid_resol, batchsize, retrain_seed):
+    def __init__(self, neurons, xL, xR, grid_resol, batchsize, retrain_seed, symmetry):
         super(ev_pinn, self).__init__()
 
         self.xL = xL
         self.xR = xR
         self.domain_extrema = torch.tensor([xL, xR],dtype=torch.float32)
-        self.activation=   sin_wrapper()  #nn.Tanh() 
+        self.activation=    sin_wrapper()  #nn.Tanh()
 
         
         self.solution = NeuralNet_ev(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
@@ -113,7 +113,7 @@ class ev_pinn(nn.Module):
                                               regularization_param=0.,
                                               regularization_exp=2.,
                                               retrain_seed=42,
-                                              symmetry=True)
+                                              symmetry=symmetry)
         
         self.grid_resol = grid_resol
 
@@ -184,6 +184,7 @@ class ev_pinn(nn.Module):
         norm_loss = self.compute_norm_loss(input_pts)
         
         first_sol = torch.mean(abs(E-E_sol)**2)
+        first_sol =0 
         
         loss = torch.log10( pde_loss + norm_loss +  first_sol ) 
         if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| Norm Loss: ", round(torch.log10(norm_loss).item(), 4))
@@ -218,7 +219,7 @@ class ev_pinn(nn.Module):
         L = (self.xR- self.xL)
         c = np.sqrt( 2 / L)
         eig_val = np.pi * n / L 
-        return c * torch.sin( eig_val  *  pts ), eig_val
+        return c * torch.sin( eig_val  *  (pts +L/2 )), eig_val
 
     def plotting(self):
         pts= self.add_points()
@@ -234,7 +235,6 @@ class ev_pinn(nn.Module):
         plt.legend()
         plt.show
         
-#%%
 def plot_hist(hist):
     plt.figure(dpi=150)
     plt.grid(True, which="both", ls=":")
@@ -249,11 +249,11 @@ if __name__ == "__main__":
     retrain_seed = 42
     batchsize = 10
     grid_resol = 100
-    xL = 0   # shift with 0 into center in order to apply symmetry 
-    xR = 6
-    pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed)
+    xL = -3   # shift with 0 into center in order to apply symmetry 
+    xR = 3
+    pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , symmetry=False)
 
-    epochs = 30
+    epochs = 10
     
     lr = 1e-2
     betas = [0.999, 0.9999]

@@ -116,7 +116,9 @@ class ev_pinn(nn.Module):
     def parametric_conversion(self, input_pts, xL, xR):
         fb = 0.0    # TODO: adapt offset if needed
         Psi,E = self.solution(input_pts)
-        g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))
+        #g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))
+        L = xL -xR
+        g = (1 - torch.cos(np.pi/L  * (input_pts - xL))**2 ) 
 
         return fb + g*Psi, E
     
@@ -237,7 +239,7 @@ if __name__ == "__main__":
     xR = 1
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed)
 
-    epochs = 30
+    epochs = 100
     
     lr = 1e-2
     betas = [0.999, 0.9999]
