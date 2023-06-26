@@ -71,15 +71,15 @@ class NeuralNet_ev(nn.Module):
         x_neg_out= self.activation(self.output(x_neg))
         x_out= self.activation(self.output(x))
         
-        # x_neg_out= self.parametric_conversion(input_pts,x_neg_out)
-        # x_out= self.parametric_conversion(input_pts,x_out)
+        x_neg_out= self.parametric_conversion(input_pts,x_neg_out)
+        x_out= self.parametric_conversion(input_pts,x_out)
 
         if self.symmetry:
             out = x_out + x_neg_out
         else:
             out = x_out - x_neg_out
         
-        out = self.parametric_conversion(input_pts,out)
+        # out = self.parametric_conversion(input_pts,out)  If parametrize afterwards, antisymmetry not working anymore, still need to fugure our why
         return out, eigenvalue
     
     def init_xavier(self):
