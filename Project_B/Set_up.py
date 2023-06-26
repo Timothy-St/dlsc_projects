@@ -7,6 +7,14 @@ from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as plt
 import torch.optim as optim
 
+### update: Parametrization is now moved into NeuralNet_ev. Use cos function to preserve symmetry anti symmetry.
+### removed eigenvalue from main neural net, now its just a single neuron. Dont see its meaning for learning the function, especially if also embedd symmetries.
+
+### ToDos: Add orthonormal loss and implement patience condition.  
+### learn ant-/ symmetryanti with a single neuron and threshold: if self.symm(1)>=1: symetric else asymmetric
+### Suggestions: Think a patience condition is inherent to LBFGS and perhaps can more effectivly implement it with LBFGS
+### Maybe try to train over random sets and points, but can be done later if rest is working
+
 
 class sin_wrapper(nn.Module):
     # method copied from their code
@@ -17,7 +25,7 @@ class sin_wrapper(nn.Module):
 
 class NeuralNet_ev(nn.Module):
     # Modified NeuralNet to learn eigenvalue (similar to an inverse problem) and adapted forward function to inherently learn symmetry or antisymmetry solutions. Optimal weight initialization for Sin activation not clear
-    def __init__(self, activation, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed,  symmetry=True):
+    def __init__(self, activation,domain_extrema, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed,  symmetry):
         super(NeuralNet_ev, self).__init__()
         self.input_dimension = input_dimension
         self.output_dimension = output_dimension    # can extend to approach to higher dimensions 
@@ -30,24 +38,33 @@ class NeuralNet_ev(nn.Module):
         
         self.symmetry = symmetry # learn symmetric function 
         self.activation = activation
+        self.domain_extrema = domain_extrema
         
         self.ev_in = nn.Linear(1,1)     # eigenvalue transformation 
-        self.input_layer = nn.Linear(self.input_dimension + 1 ,self.neurons)
+        
+        self.input_layer = nn.Linear(self.input_dimension ,self.neurons)
         self.hidden_layers = nn.ModuleList([nn.Linear(self.neurons, self.neurons) for _ in range(n_hidden_layers - 1)])
-        self.res_layer = nn.Linear(self.neurons+1, self.neurons)    # They feed in eigenvalues right before output layer
-        self.output = nn.Linear(self.neurons+1, 1)
+        self.res_layer = nn.Linear(self.neurons, self.neurons)    # They feed in eigenvalues right before output layer
+        self.output = nn.Linear(self.neurons, 1)
         
-        #self.init_xavier()
+        #self.init_xavier()    causes trouble with symmetrization, assume that initializes a linear NN -> x + x_neg = 0
         
+    def parametric_conversion(self, input_pts, NN_output):
+        xL = self.domain_extrema[0]
+        xR = self.domain_extrema[1]
+        L = xR- xL
         
-    def forward(self, x):
-        # changed your forward function slightly and added res_layer. the shapes before did not match and gave errors. Also think they
-        # had a res layer just before output. so in hidden layers think is better if just put in x and x_neg otherwise if concat. with 
-        # eigenvalues a start but don't feed them in with every layer then looses its meaning...
-        eigenvalue = self.ev_in(torch.ones_like(x))
+        fb = 0.0    # offset if needed
+        g= torch.cos(np.pi/L  * input_pts)   #preserves symmetry 
+        
+        return fb + g*NN_output
+     
+        
+    def forward(self, input_pts):
+        eigenvalue = self.ev_in(torch.ones_like(input_pts))
 
-        x_neg = self.input_layer(torch.cat((-1*x,eigenvalue), 1))  #negated input for symmetry transformation
-        x = self.input_layer(torch.cat((x,eigenvalue), 1))
+        x_neg = self.input_layer(-1*input_pts)  #negated input for symmetry transformation
+        x = self.input_layer(input_pts)
 
         x_neg = self.activation(x_neg)
         x = self.activation(x)
@@ -55,17 +72,19 @@ class NeuralNet_ev(nn.Module):
         for k, l in enumerate(self.hidden_layers):
             x_neg = self.activation(l(x_neg))
             x = self.activation(l(x))
-
-        x_neg = self.res_layer(torch.cat((x_neg,eigenvalue), 1))
-        x = self.res_layer(torch.cat((x,eigenvalue), 1))
-        x_neg = self.activation(x_neg)
-        x = self.activation(x)
+        
+        x_neg_out= self.activation(self.output(x_neg))
+        x_out= self.activation(self.output(x))
+        
+        # x_neg_out= self.parametric_conversion(input_pts,x_neg_out)    since parametrization now even, can move it after symmetrization 
+        # x_out= self.parametric_conversion(input_pts,x_out)
 
         if self.symmetry:
-            out = self.output(torch.cat((x + x_neg, eigenvalue), 1))
+            out = x_out + x_neg_out
         else:
-            out = self.output(torch.cat((x - x_neg, eigenvalue), 1))
-            
+            out = x_out - x_neg_out
+        
+        out = self.parametric_conversion(input_pts,out)   
         return out, eigenvalue
     
     def init_xavier(self):
@@ -84,22 +103,22 @@ class NeuralNet_ev(nn.Module):
         
 class ev_pinn(nn.Module):
 
-    def __init__(self, neurons, xL, xR, grid_resol, batchsize, retrain_seed):
+    def __init__(self, neurons, xL, xR, grid_resol, batchsize, retrain_seed, symmetry):
         super(ev_pinn, self).__init__()
 
         self.xL = xL
         self.xR = xR
         self.domain_extrema = torch.tensor([xL, xR],dtype=torch.float32)
-        self.activation=   sin_wrapper()  #nn.Tanh() 
+        self.activation=  nn.Tanh() 
 
         
-        self.solution = NeuralNet_ev(self.activation,input_dimension=1, output_dimension=1,
+        self.solution = NeuralNet_ev(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
                                               n_hidden_layers=0,
                                               neurons=20,
                                               regularization_param=0.,
                                               regularization_exp=2.,
                                               retrain_seed=42,
-                                              symmetry=False)
+                                              symmetry=symmetry)
         
         self.grid_resol = grid_resol
 
@@ -113,15 +132,6 @@ class ev_pinn(nn.Module):
         input_pts = torch.linspace(self.domain_extrema[0], self.domain_extrema[1], self.grid_resol)
         return input_pts.reshape(-1,1)
     
-    def parametric_conversion(self, input_pts, xL, xR):
-        fb = 0.0    # TODO: adapt offset if needed
-        Psi,E = self.solution(input_pts)
-        #g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))
-        L = xL -xR
-        g = (1 - torch.cos(np.pi/L  * (input_pts - xL))**2 ) 
-
-        return fb + g*Psi, E
-    
     def potential_sw(self, input_pts):
         # single well potential
         l = 1
@@ -133,14 +143,13 @@ class ev_pinn(nn.Module):
 
         return V_torch
     
-    
     def compute_pde_loss(self, input_pts): 
         input_pts.requires_grad = True
         xL = self.domain_extrema[0]
         xR = self.domain_extrema[1]
-        # V = self.potential_sw(input_pts)    later add potential 
+        # V = self.potential_sw(input_pts)    later also add potential 
 
-        f, E = self.parametric_conversion(input_pts, xL, xR)
+        f, E = self.solution(input_pts)
         grad_f_x = torch.autograd.grad(f.sum(), input_pts, create_graph=True)[0]   
         grad_f_xx = torch.autograd.grad(grad_f_x.sum(), input_pts, create_graph=True)[0]
         
@@ -153,25 +162,27 @@ class ev_pinn(nn.Module):
     
     def compute_norm_loss(self, input_pts):
         # discrete squared integral needs to equal 1
-        f, E = self.parametric_conversion(input_pts, xL, xR)
-        norm_loss = torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL) 
+        f, E = self.solution(input_pts)
+        xL = self.domain_extrema[0]
+        xR = self.domain_extrema[1]
+        norm_loss = (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2) 
         return norm_loss
 
     def compute_loss(self, input_pts, verbose=True):
         input_pts.requires_grad = True
         xL = self.domain_extrema[0]
         xR = self.domain_extrema[1]
-        f, E = self.parametric_conversion(input_pts, xL, xR)
-        
-        E_sol = torch.full(E.shape, np.pi / (xR-xL) ) #force to learn first solution
-        
+        f, E = self.solution(input_pts)
         
         pde_loss = self.compute_pde_loss(input_pts)
         norm_loss = self.compute_norm_loss(input_pts)
         
-        first_sol = torch.mean(abs(E-E_sol)**2)
+        #force to learn solution for some n to get insights, remove in general
+        n = 1
+        E_sol = torch.full(E.shape, np.pi *n / (xR-xL) ) 
+        specific_sol = torch.mean(abs(E-E_sol)**2)
         
-        loss = torch.log10( pde_loss + norm_loss +  first_sol ) 
+        loss = torch.log10( pde_loss + norm_loss + 10* specific_sol ) 
         if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| Norm Loss: ", round(torch.log10(norm_loss).item(), 4))
 
         return loss
@@ -184,7 +195,7 @@ class ev_pinn(nn.Module):
         for epoch in range(num_epochs):
             if verbose: print("################################ ", epoch, " ################################")
 
-            for j, ksk in enumerate(self.training_pts):
+            for j, ksk in enumerate(self.training_pts):    #here perhaps want to train over random points and sets
                 def closure():
                     optimizer.zero_grad()
                     loss = self.compute_loss(self.training_pts, verbose=verbose)
@@ -199,28 +210,28 @@ class ev_pinn(nn.Module):
 
         return history
 
-    def exact_solution(self,pts, n):
+    def exact_solution(self,pts, n=1):
         #returns exact solution for free particle V=0:
         L = (self.xR- self.xL)
         c = np.sqrt( 2 / L)
         eig_val = np.pi * n / L 
-        return c * torch.sin( eig_val  * ( pts + L/2 )), eig_val
+        return c * torch.sin( eig_val  *  (pts + L/2)), eig_val
 
     def plotting(self):
         pts= self.add_points()
-        f, E = self.parametric_conversion(pts, self.xL, self.xR)
+        f, E = self.solution(pts)
         E = round(E[0].item(), 4)
         
-        exact_f, excact_E = self.exact_solution(pts, 1)
+        exact_f, excact_E = self.exact_solution(pts, n=1)
         excact_E = round(excact_E, 4)
         
         plt.figure()
         plt.plot(pts.detach(), f.detach(), label= f'Approximate E: {E}')
         plt.plot(pts.detach(), exact_f.detach(), label= f'Exact E: {excact_E}')
+        plt.plot(pts.detach(), - exact_f.detach(), label= f'Exact E: {excact_E}')
         plt.legend()
         plt.show
         
-#%%
 def plot_hist(hist):
     plt.figure(dpi=150)
     plt.grid(True, which="both", ls=":")
@@ -231,19 +242,27 @@ def plot_hist(hist):
 
 #%%
 if __name__ == "__main__":
-    neurons = 10
+    neurons = 20
     retrain_seed = 42
     batchsize = 10
     grid_resol = 100
-    xL = -1   # shift in order to apply symmetry 
+    xL = -1   # shift with 0 into center in order to apply symmetry transformation
     xR = 1
-    pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed)
+    pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , symmetry=True)
 
-    epochs = 100
+    epochs = 50
     
     lr = 1e-2
     betas = [0.999, 0.9999]
-    optimizer = optim.Adam(pinn.parameters(), lr=lr)
+    optimizer = optim.Adam(pinn.solution.parameters(), lr=lr)
+    optimizer_LBFGS = optim.LBFGS(pinn.solution.parameters(),
+                              lr=float(0.5),
+                              max_iter=50000,
+                              max_eval=50000,
+                              history_size=150,
+                              line_search_fn="strong_wolfe",
+                              tolerance_change=1.0 * np.finfo(float).eps)
+    
     
     history =pinn.fit(epochs,optimizer)
     plot_hist(history)
@@ -264,15 +283,26 @@ if __name__ == "__main__":
 
 
 
+# %%
+### Parametrizer comparing ###
 
+xL=-1
+xR=1
+input_pts = torch.linspace(xL, xR, 100)
 
+L= xR-xL
+cos2_g = (1 - torch.cos(np.pi/L  * (input_pts - xL))**2 )
+exp_g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))
+sin_g= torch.cos(np.pi/L  * (input_pts))
 
-
-
-
-
-
-
-
+pts= input_pts.detach()
+plt.figure()
+plt.plot(pts, cos2_g.detach(), label= f' (1 -cos2(a x))')
+plt.plot(pts, exp_g.detach(), label= f' (1 - exp)(1-exp)')
+plt.plot(pts, sin_g.detach(), label= f' cos(ax)')
+plt.legend()
+plt.show
+# asymmetric weighting of the conventional (1-e)(1-e) counter productive for learning task. 
+# Asymmetric bias especially significant for unnormalized input
 
 # %%
