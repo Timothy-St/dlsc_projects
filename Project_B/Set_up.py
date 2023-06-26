@@ -134,7 +134,7 @@ class ev_pinn(nn.Module):
         center = (self.domain_extrema[0] + self.domain_extrema[1]).numpy()/2    # center of well
 
         V_np = np.heaviside(-(input_pts.detach().numpy() - center + l), 0.5) + np.heaviside(input_pts.detach().numpy() - center - l, 0.5)
-        V_torch = t = torch.from_numpy(V_np)
+        V_torch = torch.from_numpy(V_np)
 
         return V_torch
     
