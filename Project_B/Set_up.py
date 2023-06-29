@@ -17,6 +17,18 @@ import copy
 ### Suggestions: Think a patience condition is inherent to LBFGS and perhaps can more effectivly implement it with LBFGS
 ### Maybe try to train over random sets and points, but can be done later if rest is working
 
+### update: adapted fit function st it implements patience and loss condition for LBFGS optimizer. It also switches the symmetry if both conditions arent met
+### after LBFGS terminated. Added the ortho loss function in two ways. Once all already computed eigenfcts are summed up and other one not. 
+### Added the function perturb_pts which takes input_pts and perturbs them in closure() fct before computing loss. The perturbation should be st the order of
+### the initial grid is not changed -> use for this that grid is evenly spaced with delta_x. the noise is uniform and magnitude is controlled by new parameter
+### sigma in range [0, 1). 
+
+### TODOs: Try to generalize to multiple epochs/higher order solutions. 
+### LBFGS seems to still do not enough iterations (never seen iteration count larger than 55), why?
+### Check which ortoloss version works better.
+### It could be useful if LBFGS approach in fit fct doesnt work to adapt it to ADAM optim.
+### evt include in fit function way for batched data but dont think is that important since training set is small enough...
+
 
 class sin_wrapper(nn.Module):
     # method copied from their code
@@ -105,7 +117,7 @@ class NeuralNet_ev(nn.Module):
         
 class ev_pinn(nn.Module):
 
-    def __init__(self, neurons, xL, xR, grid_resol, batchsize, retrain_seed, symmetry):
+    def __init__(self, neurons, xL, xR, grid_resol, batchsize, retrain_seed, sigma, symmetry):
         super(ev_pinn, self).__init__()
 
         self.xL = xL
@@ -125,9 +137,7 @@ class ev_pinn(nn.Module):
                                               symmetry=symmetry)
         
         self.grid_resol = grid_resol
-
-        # TODO: other hyperparameters...
-        # TODO: How to best handle data points... 
+        self.sigma = sigma              # for randomizing points -> should be in [0,1) such that order of grid points is the same
 
         self.training_pts = self.add_points()   # if we do not want batched inputs then this is enough I think
         
@@ -212,11 +222,16 @@ class ev_pinn(nn.Module):
 
         return loss
     
-    def perturb_pts(self, input_pts):
+    def perturb_pts(self, input_pts, xL, xR):
+        # assume input_pts to be evenly spaced as provided by training_pts
+        delta_x = input_pts[1] - input_pts[0]
+        noise = torch.rand_like(input_pts)  # uniform noise in [0,1)
+        noise = (2*noise - 1)*delta_x/2*self.sigma     #noise should now be in [-delta_x/2, +delta_x/2) interval -> so order after perturbation of points shoul be conserved
+        input_pts = torch.clamp(input_pts + noise, min=xL, max=xR)  # should still lie in [xL, xR] range
 
-        # TODO: maybe useful like in their code to pertrub gridpoints...
+        # TODO: evt better for end values of input_pts to have same values xL nd xR...
 
-        return 0
+        return input_pts
     
     
     def fit(self, num_epochs, optimizer, max_iter, loss_tolerance, verbose=True):
@@ -244,7 +259,7 @@ class ev_pinn(nn.Module):
                     iter_counter += 1
 
                     optimizer.zero_grad()
-                    loss = self.compute_loss(self.training_pts, verbose=verbose)
+                    loss = self.compute_loss(self.perturb_pts(self.training_pts, self.domain_extrema[0], self.domain_extrema[1]), verbose=verbose)
                     loss.backward()
 
                     history.append(loss.item())
@@ -272,9 +287,8 @@ class ev_pinn(nn.Module):
                         ortho_counter += 1
                 else:
                     self.eigenf_list.append(copy.deepcopy(self.solution))   # store deep copy of NN at that point -> better than storing values on grid st can also use random perturbed points
-                    # ortho_loss = self.compute_ortho_loss_sum(self.training_pts)   # just to check if ortho loss works
-                    # ortho_loss = self.compute_ortho_loss_single(self.training_pts)   # just to check if ortho loss works
                     ortho_counter = 2   # leave while loop bc found sol
+                    print('LBFGS final loop iter counter: ', iter_counter)
 
         print('Final Loss: ', history[-1])
 
@@ -318,12 +332,13 @@ if __name__ == "__main__":
     grid_resol = 100
     xL = -1   # shift with 0 into center in order to apply symmetry transformation
     xR = 1
-    pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , symmetry=True)
+    sigma = 0.5
+    pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , sigma, symmetry=True)
 
     # fit and LBFGS parameters
     epochs = 1              # TODO: look at behaviour at higher epochs...
     max_iter = 1000
-    tolerance_grad = 1e-8 # patience condition tolerance -> not exactly the same bc LBFGS looks at gradient but should definitely behave similarly
+    tolerance_grad = 1e-6 # patience condition tolerance -> not exactly the same bc LBFGS looks at gradient but should definitely behave similarly
     loss_tolerance = 1e-1   # loss condition tolerance
     # lr = 1e-2
 
@@ -340,7 +355,7 @@ if __name__ == "__main__":
     history =pinn.fit(epochs,optimizer_LBFGS, max_iter, loss_tolerance)
 
     if history == -1:
-        print('failed')
+        print('failed: did not find a solution satisfying both conditions')
     else:
         plot_hist(history)
         pinn.plotting()
