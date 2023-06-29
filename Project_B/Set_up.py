@@ -6,6 +6,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as plt
 import torch.optim as optim
+import math
 
 ### update: Parametrization is now moved into NeuralNet_ev. Use cos function to preserve symmetry anti symmetry.
 ### removed eigenvalue from main neural net, now its just a single neuron. Dont see its meaning for learning the function, especially if also embedd symmetries.
@@ -111,6 +112,8 @@ class ev_pinn(nn.Module):
         self.domain_extrema = torch.tensor([xL, xR],dtype=torch.float32)
         self.activation=  nn.Tanh() 
 
+        self.eigenf_list = []   # should contain all the found eigenfunctions in a list
+
         
         self.solution = NeuralNet_ev(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
                                               n_hidden_layers=0,
@@ -188,23 +191,60 @@ class ev_pinn(nn.Module):
         return loss
     
     
-    def fit(self, num_epochs, optimizer, verbose=True):
+    def fit(self, num_epochs, optimizer, max_iter, loss_tolerance, verbose=True):
+        # TODO: find evt better way for implementing if conditions and evaluating models -> have problem if data is batched
+
         history = list()
 
         # Loop over epochs
         for epoch in range(num_epochs):
             if verbose: print("################################ ", epoch, " ################################")
 
-            for j, ksk in enumerate(self.training_pts):    #here perhaps want to train over random points and sets
+            patience_condition = False      # boolean if LBFGS met patience condition
+            loss_condition = False          # True if loss is under certain value
+            ortho_counter = 0               # to keep track of how many times switched symm -> max one switch
+
+            while ortho_counter < 2:
+
+                iter_counter = 0            # counts how many closure() calls LBFGS did
+
+                # for j, ksk in enumerate(self.training_pts): 
+                # took out this for loop because have no batches and it just looped over each entry of training points tensor
+                    
                 def closure():
+                    nonlocal iter_counter
+                    iter_counter += 1
+
                     optimizer.zero_grad()
                     loss = self.compute_loss(self.training_pts, verbose=verbose)
                     loss.backward()
 
                     history.append(loss.item())
+
                     return loss
 
                 optimizer.step(closure=closure)
+            
+                if iter_counter < math.ceil(1.25*max_iter):
+                    patience_condition = True
+                else:
+                    patience_condition = False
+                
+                if 10**history[-1] <= loss_tolerance:
+                    loss_condition = True
+                else:
+                    loss_condition = False
+
+                if not(patience_condition and loss_condition):
+                    # not both true at the same time -> change symmetry and try again
+                    if ortho_counter:   # if ortho = 1 and cond for convergence false -> leave function
+                        return -1       # stop iteration, did not find even or odd sol...
+                    else:
+                        self.solution.symmetry = not self.solution.symmetry
+                        ortho_counter += 1
+                else:
+                    self.eigenf_list.append(self.solution(self.training_pts))
+                    ortho_counter = 2   # leave while loop bc found sol
 
         print('Final Loss: ', history[-1])
 
@@ -250,29 +290,37 @@ if __name__ == "__main__":
     xR = 1
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , symmetry=True)
 
-    epochs = 50
-    
-    lr = 1e-2
+    # fit and LBFGS parameters
+    epochs = 1
+    max_iter = 1000
+    tolerance_grad = 1e-8 # patience condition tolerance -> not exactly the same bc LBFGS looks at gradient but should definitely behave similarly
+    loss_tolerance = 1e-1   # loss condition tolerance
+    # lr = 1e-2
+
     betas = [0.999, 0.9999]
-    optimizer = optim.Adam(pinn.solution.parameters(), lr=lr)
+    
     optimizer_LBFGS = optim.LBFGS(pinn.solution.parameters(),
                               lr=float(0.5),
-                              max_iter=50000,
-                              max_eval=50000,
-                              history_size=150,
-                              line_search_fn="strong_wolfe",
-                              tolerance_change=1.0 * np.finfo(float).eps)
+                              max_iter=max_iter,
+                              max_eval=max_iter*1.25,           # default value
+                              tolerance_grad=tolerance_grad,
+                              history_size=100,
+                              line_search_fn="strong_wolfe")
     
-    
-    history =pinn.fit(epochs,optimizer)
-    plot_hist(history)
-    
-    pinn.plotting()
-    
-    
+    history =pinn.fit(epochs,optimizer_LBFGS, max_iter, loss_tolerance)
 
+    if history == -1:
+        print('failed')
+    else:
+        plot_hist(history)
+        pinn.plotting()
 
-
+    # history =pinn.fit(epochs,optimizer)
+    # lot_hist(history)
+    
+    # pinn.plotting()
+    
+    
 
 
 
@@ -286,7 +334,7 @@ if __name__ == "__main__":
 # %%
 ### Parametrizer comparing ###
 
-xL=-1
+"""xL=-1
 xR=1
 input_pts = torch.linspace(xL, xR, 100)
 
@@ -301,7 +349,7 @@ plt.plot(pts, cos2_g.detach(), label= f' (1 -cos2(a x))')
 plt.plot(pts, exp_g.detach(), label= f' (1 - exp)(1-exp)')
 plt.plot(pts, sin_g.detach(), label= f' cos(ax)')
 plt.legend()
-plt.show
+plt.show()"""
 # asymmetric weighting of the conventional (1-e)(1-e) counter productive for learning task. 
 # Asymmetric bias especially significant for unnormalized input
 
