@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as plt
 import torch.optim as optim
 import math
+import copy
 
 ### update: Parametrization is now moved into NeuralNet_ev. Use cos function to preserve symmetry anti symmetry.
 ### removed eigenvalue from main neural net, now its just a single neuron. Dont see its meaning for learning the function, especially if also embedd symmetries.
@@ -170,6 +171,21 @@ class ev_pinn(nn.Module):
         xR = self.domain_extrema[1]
         norm_loss = (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2) 
         return norm_loss
+    
+    def compute_ortho_loss_sum(self, input_pts):
+        # ortho condition as in paper -> sum of all found eigenf
+        psi_eigen = torch.zeros(input_pts.size())
+        for NN in self.eigenf_list:
+            psi_eigen += NN(input_pts)[0]
+        ortho_loss = torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze())
+        return ortho_loss
+    
+    def compute_ortho_loss_single(self, input_pts):
+        # alternative ortho cond -> dot product with each eigenf
+        res = 0
+        for NN in self.eigenf_list:
+            res += torch.dot(NN(input_pts)[0].squeeze(), self.solution(input_pts)[0].squeeze())
+        return res/len(self.eigenf_list)
 
     def compute_loss(self, input_pts, verbose=True):
         input_pts.requires_grad = True
@@ -179,13 +195,19 @@ class ev_pinn(nn.Module):
         
         pde_loss = self.compute_pde_loss(input_pts)
         norm_loss = self.compute_norm_loss(input_pts)
+
+        if len(self.eigenf_list) > 0:
+            ortho_loss = self.compute_ortho_loss_sum(input_pts)         # TODO: check which ortho loss works better
+            # ortho_loss = self.compute_ortho_loss_single(input_pts)
+        else:
+            ortho_loss = 0
         
         #force to learn solution for some n to get insights, remove in general
         n = 1
         E_sol = torch.full(E.shape, np.pi *n / (xR-xL) ) 
         specific_sol = torch.mean(abs(E-E_sol)**2)
         
-        loss = torch.log10( pde_loss + norm_loss + 10* specific_sol ) 
+        loss = torch.log10( pde_loss + norm_loss + ortho_loss + 10* specific_sol ) 
         if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| Norm Loss: ", round(torch.log10(norm_loss).item(), 4))
 
         return loss
@@ -243,7 +265,9 @@ class ev_pinn(nn.Module):
                         self.solution.symmetry = not self.solution.symmetry
                         ortho_counter += 1
                 else:
-                    self.eigenf_list.append(self.solution(self.training_pts))
+                    self.eigenf_list.append(copy.deepcopy(self.solution))   # store deep copy of NN at that point -> better than storing values on grid st can also use random perturbed points
+                    # ortho_loss = self.compute_ortho_loss_sum(self.training_pts)   # just to check if ortho loss works
+                    # ortho_loss = self.compute_ortho_loss_single(self.training_pts)   # just to check if ortho loss works
                     ortho_counter = 2   # leave while loop bc found sol
 
         print('Final Loss: ', history[-1])
