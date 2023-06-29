@@ -212,6 +212,12 @@ class ev_pinn(nn.Module):
 
         return loss
     
+    def perturb_pts(self, input_pts):
+
+        # TODO: maybe useful like in their code to pertrub gridpoints...
+
+        return 0
+    
     
     def fit(self, num_epochs, optimizer, max_iter, loss_tolerance, verbose=True):
         # TODO: find evt better way for implementing if conditions and evaluating models -> have problem if data is batched
@@ -294,7 +300,7 @@ class ev_pinn(nn.Module):
         plt.plot(pts.detach(), exact_f.detach(), label= f'Exact E: {excact_E}')
         plt.plot(pts.detach(), - exact_f.detach(), label= f'Exact E: {excact_E}')
         plt.legend()
-        plt.show
+        plt.show()
         
 def plot_hist(hist):
     plt.figure(dpi=150)
