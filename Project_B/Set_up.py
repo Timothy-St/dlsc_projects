@@ -321,7 +321,7 @@ if __name__ == "__main__":
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , symmetry=True)
 
     # fit and LBFGS parameters
-    epochs = 1
+    epochs = 1              # TODO: look at behaviour at higher epochs...
     max_iter = 1000
     tolerance_grad = 1e-8 # patience condition tolerance -> not exactly the same bc LBFGS looks at gradient but should definitely behave similarly
     loss_tolerance = 1e-1   # loss condition tolerance
