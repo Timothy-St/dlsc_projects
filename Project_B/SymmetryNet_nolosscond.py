@@ -9,25 +9,14 @@ import math
 import copy
 import logging
 
-### small corrections:
-# took pow(2) in ortholoss functions and norm loss. Need to ensure that loss is non negative so either require pow2 or abs()
+### Here learn symmetry -> so have no termination condition other than number of epochs (different for every sol). This code can also be used to find which
+### number of epochs and loss_cond work best. Also tried step activation fct for symmetry node, but had error in deepcopy that I dont know how to solve.
+### Tried possible residual connection -> does not seem to give better results, but could be useful when look at generalisations...
+### Also tried to punish higher gradients slightly st learns lower eigenvalues but did not really work. 
 
-### Briefing and getting started
-# aquaint a little bit with hyperparam setting to get a feeling but dont spend much time on it.  Action is happening in fit_single_function() and learn_eigenfunction_set()
-# found that that learned interval also affects learning quality. xL =-3 performed better than xL=-1. 
-# Hyperparams we still need to play with are the betas ADAM is using, the patience threshold and window len. Observed that these params affect another a lot
-# took out log in loss -> think that exponential patience threshold is not made for log. 
-
-#ToDo:
-# Probably need another design idea to encourage learning eigenval in correct order (sometimes it even learned the 5th instead of the 4th).
-# had brief approach to penalize learning high eigenvalues but not enough time to carry out
-
-# Perhpas the solution you will come up with will also resolve the problem of getting sometimes stuck at unphysical solutions (maybe by accident),
-# such that it not necessary to spend much time on the hyperparams. I would recommend to start with this as this is the most limiting factor right now and 
-# and perhaps some smaller details fall automatically into their place afterwards
-
-# with the current architecture it is very easy to go back to hard coding the symmetries, but I found that this is not the causing problem of the 
-# bad local minima it is occasionally learning. Think the symmetry learning is working quiet ok
+### TODO: same stuff as in other code
+###       1) still need better way to avoid learning high eigenvalues...
+###       2) optimize values for n_epochs and loss_conditions further
 
 
 class sin_wrapper(nn.Module):
@@ -35,6 +24,12 @@ class sin_wrapper(nn.Module):
     @staticmethod
     def forward(input):
         return torch.sin(input)
+    
+class heavi_wrapper(nn.Module):
+    # method copied from their code
+    @staticmethod
+    def forward(input):
+        return torch.heaviside(input, torch.tensor([0.5]))
 
 def closest_value(my_list, target):
     return min(my_list, key=lambda x: abs(x - target))
@@ -59,6 +54,8 @@ class SymmetrySwitchNet(nn.Module):
         # self.eigenvalue = None
         
         self.symmetry_neuron = nn.Linear(1,1) # learn if symmetric or antisymmetric
+        # self.symmetry_switch = symmetry
+
         self.symmetry_switch = symmetry
         
         self.input_layer = nn.Linear(self.input_dimension ,self.neurons)
@@ -83,6 +80,8 @@ class SymmetrySwitchNet(nn.Module):
         # Determine wether to learn a symmetric or antisymmetric function
         
         #commend following two lines if want to go back to hard coding the symmetries
+        # self.symmetry_switch = torch.heaviside(self.symmetry_neuron(torch.ones(1)), torch.tensor([0.5]))
+        # self.symmetry_switch = heavi_wrapper()(self.symmetry_neuron(torch.ones(1)))       # Tried step function as activation function but gives error with deepcopy that I dont know how to solve
         switch_val = nn.Sigmoid()(self.symmetry_neuron(torch.ones(1)))       
         self.symmetry_switch = switch_val >=0.5    #learns better with sigmoid => interpretation of a probability distribution, play with threshold eg use 0.4 for bias towards symmetric
         
@@ -95,6 +94,10 @@ class SymmetrySwitchNet(nn.Module):
         for k, l in enumerate(self.hidden_layers):
             x_neg = self.activation(l(x_neg))
             x = self.activation(l(x))
+
+        # possible residual connection -> does not seem to give better results, but could be useful when look at generalisations
+        # x = self.activation(self.res_layer(torch.cat((x,eigenvalue), 1)))
+        # x_neg = self.activation(self.res_layer(torch.cat((x_neg,eigenvalue), 1)))
         
         x_neg_out= self.activation(self.output(x_neg))
         x_out= self.activation(self.output(x))
@@ -170,6 +173,7 @@ class ev_pinn(nn.Module):
         
         return pde_loss
     
+    # TODO: evt try slight gradient punishment -> no does not help!
     
     def compute_norm_loss(self, input_pts):
         # discrete squared integral needs to equal 1
@@ -192,8 +196,9 @@ class ev_pinn(nn.Module):
         res = 0
         for NN in self.eigenf_list:
             res += (torch.dot(NN(input_pts)[0].squeeze(), self.solution(input_pts)[0].squeeze())).pow(2)  #important to take absolute value or pow(2) here 
-        return res #/len(self.eigenf_list)       # if devide by len... othogonality constrain is relaxed for higher iterations
-
+        return res/len(self.eigenf_list)       # think because sum up all residuals will have higher ortholoss for more eigenfcts but seems to be reasonable for our case
+        # return res #/len(self.eigenf_list)       # if devide by len... othogonality constrain is relaxed for higher iterations
+    
     def compute_loss(self, input_pts, verbose=True):
         input_pts.requires_grad = True
         xL = self.domain_extrema[0]
@@ -267,12 +272,15 @@ class ev_pinn(nn.Module):
         # Setup logger
  
         # Loop over epochs
-        for epoch in epochs:
+        for epoch in range(epochs):
             # verbose = (epoch % 300  == 0)
             if verbose: print("################################ ", epoch, " ################################")
             
             def closure():
                 optimizer.zero_grad()
+
+                # TODO: perturb points or not?
+
                 # loss = self.compute_loss(self.perturb_pts(self.training_pts, self.domain_extrema[0], self.domain_extrema[1]), verbose=verbose)
                 loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
                 loss.backward()
@@ -286,16 +294,16 @@ class ev_pinn(nn.Module):
               rm = np.mean(np.array(history[-window:])-np.array(history[-window-1:-1]))
             else:
               rm = np.mean(np.array(history[1:])-np.array(history[:-1]))
-              
-            if ( rm < np.exp(exp_rm_threshold) and rm > 0) or history[-1] < -1:
-                self.eigenf_list.append(copy.deepcopy(self.solution)) 
-                # eigenvalue = self.solution.ev_in(torch.ones(1))
-                # self.eigen_vals.append(solution.eigenvalue)
-                print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
-                self.plotting(len(self.eigenf_list))
-                # symmetry_change = not(self.solution.symmetry_switch)  #change symmetry for hard coding
-                del self.solution
-                self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
+
+        # since have no ortho switch removed condition, but evt put back in st dont save wrong sols...
+            
+        self.eigenf_list.append(copy.deepcopy(self.solution))
+        print('--------------------------------------')
+        print(f'rm value: {rm} and loss {history[-1]}')
+        print('--------------------------------------')
+        self.plotting(len(self.eigenf_list))
+        del self.solution
+        self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
                                               n_hidden_layers=0,
                                               neurons=20,
                                               regularization_param=0.,
@@ -303,26 +311,25 @@ class ev_pinn(nn.Module):
                                               retrain_seed=42,
                                             #   symmetry= symmetry_change
                                               )
-                return history, epoch
-            
-        print(f'Termination condition not met')            
         return history, epoch   
-    
-    def learn_eigenfunction_set(self,no_of_eingen, no_epochs, verbose= False):
+
+    def learn_eigenfunction_set(self,no_of_eingen, epochs_arr, verbose= False):
         history = []
-        
-        epochs = range(no_epochs)
-        epoch_index =0 
+        iterations = []
+
+        # changed it such that give max epochs for each sol and not in total, bc if have no loss cond 
         
         for n in range(no_of_eingen):
-            optimizer = optim.Adam(self.parameters(), lr=lr)  #Suggest to focus on ADAM, better tailored for patience cond + comparable
+            # optimizer = optim.Adam(self.parameters(), lr=lr)  #Suggest to focus on ADAM, better tailored for patience cond + comparable
             # for further improvement probably need to play with the betas. Observed that then best exp_rm_threshold also changes
+
+            # inserted weight_decay here. number can be further optimized but think in this range is not bad
+            optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=1e-4)
        
-            history_n , epoch_index =self.fit_single_function(optimizer,epochs[epoch_index:],verbose= verbose)
+            history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[n],verbose= verbose)
             history += history_n
+            iterations.append(epochs_needed+1)
         return history 
-    
-    
   
 def plot_hist(hist):
     plt.figure(dpi=150)
@@ -330,6 +337,7 @@ def plot_hist(hist):
     plt.plot(np.arange(1, len(hist) + 1), hist, label="Train Loss")
     # plt.xscale("log")
     plt.legend()
+    plt.show()
 
 if __name__ == "__main__":
     neurons = 20
@@ -342,48 +350,21 @@ if __name__ == "__main__":
     sigma = 0.5
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , sigma)
 
-  
-    epochs = 100000
+    n_solutions = 4
+
+    # different number of iterations for different solutions
+    epochs_arr = [4000, 5000, 6000, 7000]
+
+    # epochs = 6000
     
     lr = 1e-2
     betas = [0.999, 0.9999]
     
-
-    
-    history =pinn.learn_eigenfunction_set(4, epochs)
+    history =pinn.learn_eigenfunction_set(n_solutions, epochs_arr)
+    # history =pinn.learn_eigenfunction_set(n_solutions, epochs)
     
     plot_hist(history)
 
-    
-    
-    # optimizer_LBFGS = optim.LBFGS(pinn.solution.parameters(),
-    #                           lr=float(0.5),
-    #                           max_iter=max_iter,
-    #                           max_eval=max_iter*1.25,           # default value
-    #                           tolerance_grad=tolerance_grad,
-    #                         #   tolerance_change=tolerance_change,
-    #                           history_size=2,
-    #                           line_search_fn="strong_wolfe")
-    
-    # optimizer = optim.Adam(pinn.parameters(), lr=lr, betas=  betas)
-    
-    
-    
-    
-    # history =pinn.fit(epochs,optimizer, max_iter, loss_tolerance , verbose= False)
-
-    # if history == -1:
-    #     print('failed: did not find a solution satisfying both conditions')
-    # else:
-    #     plot_hist(history)
-    #     # pinn.plotting()
-
-    # history =pinn.fit(epochs,optimizer)
-    #plot_hist(history)
-    
-    # pinn.plotting()
-    
-    
 
 
 
@@ -394,26 +375,46 @@ if __name__ == "__main__":
 
 
 
-# %%
-### Parametrizer comparing ###
 
-"""xL=-1
-xR=1
-input_pts = torch.linspace(xL, xR, 100)
 
-L= xR-xL
-cos2_g = (1 - torch.cos(np.pi/L  * (input_pts - xL))**2 )
-exp_g = (1 - torch.exp(-(input_pts - xL)))*(1 - torch.exp(-(input_pts - xR)))
-sin_g= torch.cos(np.pi/L  * (input_pts))
 
-pts= input_pts.detach()
-plt.figure()
-plt.plot(pts, cos2_g.detach(), label= f' (1 -cos2(a x))')
-plt.plot(pts, exp_g.detach(), label= f' (1 - exp)(1-exp)')
-plt.plot(pts, sin_g.detach(), label= f' cos(ax)')
-plt.legend()
-plt.show()"""
-# asymmetric weighting of the conventional (1-e)(1-e) counter productive for learning task. 
-# Asymmetric bias especially significant for unnormalized input
 
-# %%
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
