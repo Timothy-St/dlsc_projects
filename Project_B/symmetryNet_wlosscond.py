@@ -51,6 +51,8 @@ class SymmetrySwitchNet(nn.Module):
         self.ev_in = nn.Linear(1,1)     # eigenvalue transformation 
 
         self.symmetry_switch = symmetry
+
+        self.symmetry_neuron = nn.Linear(1,1)
         
         self.input_layer = nn.Linear(self.input_dimension ,self.neurons)
         self.hidden_layers = nn.ModuleList([nn.Linear(self.neurons, self.neurons) for _ in range(n_hidden_layers - 1)])
@@ -70,6 +72,9 @@ class SymmetrySwitchNet(nn.Module):
         
     def forward(self, input_pts):
         eigenvalue = self.ev_in(torch.ones_like(input_pts))
+
+        switch_val = nn.Sigmoid()(self.symmetry_neuron(torch.ones(1)))       
+        self.symmetry_switch = switch_val >=0.5
         
         x_neg = self.input_layer(-1*input_pts)  #negated input for symmetry transformation
         x = self.input_layer(input_pts)     
@@ -166,6 +171,7 @@ class ev_pinn(nn.Module):
         xL = self.domain_extrema[0]
         xR = self.domain_extrema[1]
         norm_loss = (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2)   # pow(2) also to ensure positive values
+        # norm_loss = abs(torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL))   # l1 loss
         return norm_loss
     
     def compute_ortho_loss_sum(self, input_pts):
@@ -173,6 +179,7 @@ class ev_pinn(nn.Module):
         psi_eigen = torch.zeros(input_pts.size())
         for NN in self.eigenf_list:
             psi_eigen += NN(input_pts)[0]
+        # ortho_loss = abs(torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze()))   # L1 loss
         ortho_loss = (torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze())).pow(2)   #use pow(2) but at least abs => ensure positive loss
         return  ortho_loss     
     
@@ -255,50 +262,47 @@ class ev_pinn(nn.Module):
         ortho_counter = 0
         # Setup logger
 
-        while ortho_counter<2:
-            # Loop over epochs
-            for epoch in range(epochs):
-                # verbose = (epoch % 300  == 0)
-                if verbose: print("################################ ", epoch, " ################################")
-                
-                def closure():
-                    optimizer.zero_grad()
-                    # loss = self.compute_loss(self.perturb_pts(self.training_pts, self.domain_extrema[0], self.domain_extrema[1]), verbose=verbose)
-                    loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
-                    loss.backward()
-                    history.append(loss.item())
-                    return loss
 
-                optimizer.step(closure=closure)
-                
-                #rolling mean for patience condition
-                if len(history) >= window+1:
-                    rm = np.mean(np.array(history[-window:])-np.array(history[-window-1:-1]))
-                else:
-                    rm = np.mean(np.array(history[1:])-np.array(history[:-1]))
-                
-                if abs(rm) < rm_cond and history[-1] < loss_cond:           # changed cndition from or to and
-                    self.eigenf_list.append(copy.deepcopy(self.solution)) 
-                    # eigenvalue = self.solution.ev_in(torch.ones(1))
-                    # self.eigen_vals.append(solution.eigenvalue)
-                    print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
-                    self.plotting(len(self.eigenf_list))
-                    # symmetry_change = not(self.solution.symmetry_switch)  #change symmetry for hard coding
-                    del self.solution
-                    self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
-                                                n_hidden_layers=0,
-                                                neurons=20,
-                                                regularization_param=0.,
-                                                regularization_exp=2.,
-                                                retrain_seed=42,
-                                                #   symmetry= symmetry_change
-                                                )
-                    return history, epoch
+        # Loop over epochs
+        for epoch in range(epochs):
+            # verbose = (epoch % 300  == 0)
+            if verbose: print("################################ ", epoch, " ################################")
             
-            ortho_counter += 1          # if termination cond not satisfied after epoch loop try with opposite symmetry
-            self.solution.symmetry_switch = not self.solution.symmetry_switch
-            print(f'rm value: {rm} and loss {history[-1]}')
+            def closure():
+                optimizer.zero_grad()
+                # loss = self.compute_loss(self.perturb_pts(self.training_pts, self.domain_extrema[0], self.domain_extrema[1]), verbose=verbose)
+                loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
+                loss.backward()
+                history.append(loss.item())
+                return loss
+
+            optimizer.step(closure=closure)
             
+            #rolling mean for patience condition
+            if len(history) >= window+1:
+                rm = np.mean(np.array(history[-window:])-np.array(history[-window-1:-1]))
+            else:
+                rm = np.mean(np.array(history[1:])-np.array(history[:-1]))
+            
+            if abs(rm) < rm_cond and history[-1] < loss_cond:           # changed cndition from or to and
+                self.eigenf_list.append(copy.deepcopy(self.solution)) 
+                # eigenvalue = self.solution.ev_in(torch.ones(1))
+                # self.eigen_vals.append(solution.eigenvalue)
+                print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
+                self.plotting(len(self.eigenf_list))
+                # symmetry_change = not(self.solution.symmetry_switch)  #change symmetry for hard coding
+                del self.solution
+                self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
+                                            n_hidden_layers=0,
+                                            neurons=20,
+                                            regularization_param=0.,
+                                            regularization_exp=2.,
+                                            retrain_seed=42,
+                                            #   symmetry= symmetry_change
+                                            )
+                return history, epoch
+        
+        print(f'rm value: {rm} and loss {history[-1]}')
         print(f'Termination condition not met')            
         return -1, epoch
     
@@ -313,7 +317,7 @@ class ev_pinn(nn.Module):
 
         nsols_counter = 0
 
-        while nsols_counter < no_of_eingen:
+        while nsols_counter < no_of_eingen: # substituted while for for-loop st get nsols even if dont meet termination cond in some cases...
 
             print('------- ', nsols_counter, ' -------')
 
@@ -354,7 +358,7 @@ if __name__ == "__main__":
     # TODO: think values can be further optimized
     
     rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
-    loss_cond_arr = [0.0012, 0.011, 0.075, 0.14]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
+    loss_cond_arr = [0.0012, 0.011, 0.075, 0.3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
     epochs_arr = [5000, 6500, 7000, 7000]
 
     
