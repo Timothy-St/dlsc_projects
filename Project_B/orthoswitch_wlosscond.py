@@ -317,7 +317,7 @@ class ev_pinn(nn.Module):
 
             print('------- ', nsols_counter, ' -------')
 
-            optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=1e-4)
+            optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=1e-2)
             history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[nsols_counter], rm_cond_arr[nsols_counter], loss_cond_arr[nsols_counter],verbose= verbose)
 
             if history_n == -1:
@@ -354,8 +354,8 @@ if __name__ == "__main__":
     # TODO: think values can be further optimized
     
     rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
-    loss_cond_arr = [0.001, 0.02, 0.2, 0.5]
-    epochs_arr = [4000, 5000, 6000, 7000]
+    loss_cond_arr = [0.001, 0.02, 0.1, 0.2]
+    epochs_arr = [4000, 5000, 7000, 7000]
 
     
     history =pinn.learn_eigenfunction_set(4, epochs_arr, rm_cond_arr, loss_cond_arr)

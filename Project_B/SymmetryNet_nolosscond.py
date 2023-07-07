@@ -180,7 +180,8 @@ class ev_pinn(nn.Module):
         f, E = self.solution(input_pts)
         xL = self.domain_extrema[0]
         xR = self.domain_extrema[1]
-        norm_loss = (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2)   # pow(2) also to ensure positive values
+        # norm_loss = (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2)   # pow(2) also to ensure positive values
+        norm_loss = abs(torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL))
         return norm_loss
     
     def compute_ortho_loss_sum(self, input_pts):
@@ -188,7 +189,8 @@ class ev_pinn(nn.Module):
         psi_eigen = torch.zeros(input_pts.size())
         for NN in self.eigenf_list:
             psi_eigen += NN(input_pts)[0]
-        ortho_loss = (torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze())).pow(2)   #use pow(2) but at least abs => ensure positive loss
+        ortho_loss = abs(torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze()))   #use pow(2) but at least abs => ensure positive loss
+        # ortho_loss = (torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze())).pow(2)
         return  ortho_loss     
     
     def compute_ortho_loss_single(self, input_pts):
@@ -213,16 +215,19 @@ class ev_pinn(nn.Module):
             # ortho_loss = self.compute_ortho_loss_sum(input_pts)         # Not observing a big difference
             ortho_loss = self.compute_ortho_loss_single(input_pts)       # suggest to focus on this one, computation not limiting
             # small_eigvals =   (self.solution.eigenvalue - max(self.eigen_vals))**2  #penalize learning high eigenvalues
+            # small_eigvals = E[0]**2
+            # small_eigvals = (self.solution.eigenvalue)**2
             
         else:
             ortho_loss = torch.zeros(1)
+            # small_eigvals = E[0]**2
             # small_eigvals = (self.solution.eigenvalue)**2
    
         # loss = torch.log10( pde_loss + norm_loss + ortho_loss)  
         
         # reg_decay = len(self.eigenf_list)   
         # not enough time to make this consistent with optimization. Idea was to decrease the regularization with number of eigenfunctions learned, but with current L =6 probably not necessary, as eigenvalues of similar magnitude
-        # loss = ( pde_loss + norm_loss + ortho_loss +(0.5**reg_decay) * small_eigvals)    
+        # loss = ( pde_loss + norm_loss + ortho_loss + 0.5*small_eigvals)    
         loss = ( pde_loss + norm_loss + ortho_loss ) 
         if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| Norm Loss: ", round(torch.log10(norm_loss).item(), 4),
                           "| Ortho loss: ",round(torch.log10(ortho_loss).item(), 4),  "| symmetry: ", self.solution.symmetry_switch )
@@ -324,7 +329,8 @@ class ev_pinn(nn.Module):
             # for further improvement probably need to play with the betas. Observed that then best exp_rm_threshold also changes
 
             # inserted weight_decay here. number can be further optimized but think in this range is not bad
-            optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=1e-4)
+            optimizer = optim.Adam(self.parameters(), lr=5e-3, weight_decay=1e-2)
+            # optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=1e-3, betas=[0.999, 0.9999])
        
             history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[n],verbose= verbose)
             history += history_n
@@ -350,10 +356,10 @@ if __name__ == "__main__":
     sigma = 0.5
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , sigma)
 
-    n_solutions = 4
+    n_solutions = 5
 
     # different number of iterations for different solutions
-    epochs_arr = [4000, 5000, 6000, 7000]
+    epochs_arr = [4000, 5000, 6000, 6000, 6000]
 
     # epochs = 6000
     
