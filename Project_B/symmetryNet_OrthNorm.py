@@ -34,7 +34,7 @@ def closest_value(my_list, target):
 
 class SymmetrySwitchNet(nn.Module):
     # Modified NeuralNet to learn eigenvalue (similar to an inverse problem) and adapted forward function to inherently learn symmetry or antisymmetry solutions. Optimal weight initialization for Sin activation not clear
-    def __init__(self, activation,domain_extrema, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed,symmetry=True):
+    def __init__(self, activation,domain_extrema, input_dimension, output_dimension, n_hidden_layers, neurons, regularization_param, regularization_exp, retrain_seed,symmetry=False):
         super(SymmetrySwitchNet, self).__init__()
         self.input_dimension = input_dimension
         self.output_dimension = output_dimension    # can extend to approach to higher dimensions 
@@ -74,7 +74,7 @@ class SymmetrySwitchNet(nn.Module):
         eigenvalue = self.ev_in(torch.ones_like(input_pts))
 
         switch_val = nn.Sigmoid()(self.symmetry_neuron(torch.ones(1)))       
-        self.symmetry_switch = switch_val >=0.5
+        switch = (switch_val >=0.5) or self.symmetry_switch            # if symmetry True, always learn symmetric function
         
         x_neg = self.input_layer(-1*input_pts)  #negated input for symmetry transformation
         x = self.input_layer(input_pts)     
@@ -93,7 +93,7 @@ class SymmetrySwitchNet(nn.Module):
         x_neg_out= self.activation(self.output(x_neg))
         x_out= self.activation(self.output(x))
 
-        if self.symmetry_switch:
+        if switch:
             out = x_out + x_neg_out
         else:
             out = x_out - x_neg_out
@@ -116,11 +116,11 @@ class ev_pinn(nn.Module):
         self.eigenf_list = []   # should contain all the found eigenfunctions in a list
         self.eigen_vals = []   # ToDo: still need to add eigenvals (later)
         
-        self.symmetry= True
+        self.symmetry= True    #tells that first eigenfunction needs to be symmetric
 
         
         self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
-                                              n_hidden_layers=0,
+                                              n_hidden_layers=h_layer,
                                               neurons=20,
                                               regularization_param=0.,
                                               regularization_exp=2.,
@@ -171,7 +171,7 @@ class ev_pinn(nn.Module):
         for NN in self.eigenf_list:
             res += ((torch.dot(NN(input_pts)[0].squeeze(), f.squeeze()))).pow(2)
         res += (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2)
-        return res  
+        return res
 
     def compute_loss(self, input_pts, verbose=True):
         input_pts.requires_grad = True
@@ -249,13 +249,14 @@ class ev_pinn(nn.Module):
         self.plotting(len(self.eigenf_list))
         del self.solution
         self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
-                                            n_hidden_layers=0,
+                                            n_hidden_layers=h_layer,
                                             neurons=20,
                                             regularization_param=0.,
                                             regularization_exp=2.,
                                             retrain_seed=42,
-                                            #   symmetry= symmetry_change
-                                            )
+                                            symmetry= False #now always learn the symmetry
+                                            )     
+        plot_hist(history)
         return history,  epoch
     
     def learn_eigenfunction_set(self,no_of_eingen, epochs_arr, verbose= False):
@@ -285,7 +286,7 @@ class ev_pinn(nn.Module):
         return history
   
 def plot_hist(hist):
-    plt.figure(dpi=150)
+    plt.figure(dpi=80)
     plt.grid(True, which="both", ls=":")
     plt.plot(np.arange(1, len(hist) + 1), hist, label="Train Loss")
     plt.xscale("log")
@@ -293,14 +294,23 @@ def plot_hist(hist):
     plt.show()
 
 
+def epoch_ar(base, n):
+    epoch_arr = [base]
+    for i in range(n-1):
+        epoch_arr.append(int(1.8 * epoch_arr[-1]))
+    return epoch_arr
+
+
 #%%
 if __name__ == "__main__":
-    neurons = 20
+    neurons = 5
+    h_layer = 1
+    
     retrain_seed = 42
     batchsize = 10
     grid_resol = 100
     
-    a = 2.8
+    a = 3
     xL = -a; xR = a # shift with 0 into center in order to apply symmetry transformation
     # sigma = 0.5
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , sigma)
@@ -308,13 +318,11 @@ if __name__ == "__main__":
     # lr = 1e-2
     betas = [0.999, 0.9999]
 
-    # TODO: think values can be further optimized
+      
+    epochs_arr = [1500, 5000, 7000, 7000]
     
-    rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
-    loss_cond_arr = [0.0012, 0.05, 0.075, 0.3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
-    epochs_arr = [1100, 2000, 3000, 5000]
-    # epochs_arr = [50, 65, 70, 70]
-    # epochs_arr = [5000, 6500, 7000, 7000, 7000, 7000, 7000, 7000]
+    # epochs_arr = epoch_ar(500,4)
+
 
     
     history =pinn.learn_eigenfunction_set(4, epochs_arr, verbose=False)
@@ -325,7 +333,7 @@ if __name__ == "__main__":
 
 # %%
 
-
+pinn.plotting(n=5)
 
 
 
@@ -340,3 +348,4 @@ if __name__ == "__main__":
     #     input_pts = torch.clamp(input_pts + noise, min=xL, max=xR)  # should still lie in [xL, xR] range
 
     #     return input_pts
+# %%
