@@ -194,6 +194,7 @@ class ev_pinn(nn.Module):
             res += (torch.dot(NN(input_pts)[0].squeeze(), self.solution(input_pts)[0].squeeze())).pow(2)  #important to take absolute value or pow(2) here 
         return res #/len(self.eigenf_list)       # if devide by len... othogonality constrain is relaxed for higher iterations
 
+
     def compute_loss(self, input_pts, verbose=True):
         input_pts.requires_grad = True
         xL = self.domain_extrema[0]
