@@ -323,8 +323,8 @@ class ev_pinn(nn.Module):
                 def closure():
                     optimizer.zero_grad()
                     # loss = self.compute_loss(self.perturb_pts(self.training_pts, self.domain_extrema[0], self.domain_extrema[1]), verbose=verbose)
-                    # loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
-                    loss = self.compute_loss_sw(self.training_pts, verbose)
+                    loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
+                    # loss = self.compute_loss_sw(self.training_pts, verbose)
                     loss.backward()
                     history.append(loss.item())
                     return loss
@@ -342,8 +342,8 @@ class ev_pinn(nn.Module):
                     # eigenvalue = self.solution.ev_in(torch.ones(1))
                     # self.eigen_vals.append(solution.eigenvalue)
                     print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
-                    self.plotting_sw()
-                    # self.plotting(len(self.eigenf_list))
+                    # self.plotting_sw()
+                    self.plotting(len(self.eigenf_list))
                     # symmetry_change = not(self.solution.symmetry_switch)  #change symmetry for hard coding
                     del self.solution
                     self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
@@ -414,12 +414,12 @@ if __name__ == "__main__":
 
     # TODO: think values can be further optimized
     
-    rm_cond_arr = [5e-3, 5e-3, 5e-3, 5e-3]
-    # rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
-    loss_cond_arr = [3, 10, 3, 3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
-    # loss_cond_arr = [0.0012, 0.011, 0.075, 0.14]
-    epochs_arr = [1000, 1000, 1000, 1000]
-    # epochs_arr = [5000, 6500, 7000, 7000]
+    # rm_cond_arr = [5e-3, 5e-3, 5e-3, 5e-3]
+    rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
+    # loss_cond_arr = [3, 10, 3, 3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
+    loss_cond_arr = [0.0012, 0.011, 0.075, 0.14]
+    # epochs_arr = [1000, 1000, 1000, 1000]
+    epochs_arr = [5000, 6500, 7000, 7000]
 
     
     history =pinn.learn_eigenfunction_set(4, epochs_arr, rm_cond_arr, loss_cond_arr)
