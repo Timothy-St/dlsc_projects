@@ -11,7 +11,8 @@ import logging
 
 ### this has the original orto switch in it. I also added weight decay to adam. it learns until it reached n_sols even if did not satisfy loss_cond.
 ### adapted loss cond: before was (rm<...) or (loss<...), now it is (rm<...) and (loss<...) which makes more sense, bc want both conditions satisfied. 
-### also have loss_conditions for each sol as well as number of epochs for each sol.
+### also have loss_conditions for each sol as well as number of epochs for each sol. Lowered learning rate. Also tried to add the eigenvalue to the loss st
+### it learns lower EWs but did not make it more stable. Also tried punishing gradients, but also didi not work too well. 
 
 ### TODO: 1) still need better way to avoid learning high eigenvalues...
 ###       2) optimize values for n_epochs and loss_conditions further
@@ -136,9 +137,10 @@ class ev_pinn(nn.Module):
         # single well potential
         l = 1
         V0 = 20
-        center = (self.domain_extrema[0] + self.domain_extrema[1]).numpy()/2    # center of well
+        center = 0.0
+        # center = (self.domain_extrema[0] + self.domain_extrema[1]).numpy()/2    # center of well
 
-        V_np = np.heaviside(-(input_pts.detach().numpy() - center + l), 0.5) + np.heaviside(input_pts.detach().numpy() - center - l, 0.5)
+        V_np = V0*(np.heaviside(-(input_pts.detach().numpy() - center + l), 0.5) + np.heaviside(input_pts.detach().numpy() - center - l, 0.5))
         V_torch = torch.from_numpy(V_np)
 
         return V_torch
@@ -147,7 +149,6 @@ class ev_pinn(nn.Module):
         input_pts.requires_grad = True
         xL = self.domain_extrema[0]
         xR = self.domain_extrema[1]
-        # V = self.potential_sw(input_pts)    later also add potential 
 
         f, E = self.solution(input_pts)
         grad_f_x = torch.autograd.grad(f.sum(), input_pts, create_graph=True)[0]   
@@ -159,6 +160,22 @@ class ev_pinn(nn.Module):
         
         return pde_loss
     
+    def compute_pde_loss_sw(self, input_pts):
+        input_pts.requires_grad = True
+        xL = self.domain_extrema[0]
+        xR = self.domain_extrema[1]
+        V = self.potential_sw(input_pts)    
+
+        f, E = self.solution(input_pts)
+        grad_f_x = torch.autograd.grad(f.sum(), input_pts, create_graph=True)[0]   
+        grad_f_xx = torch.autograd.grad(grad_f_x.sum(), input_pts, create_graph=True)[0]
+        
+        # calculate pde loss
+        pde_residual = grad_f_xx/2 +  (E-V)*f   #   (E - V)*f      #Small mistakes in pde_res: formerly was   grad_f_xx/2 +  E *f    think that is later for hydrogen 
+        pde_loss = torch.mean(pde_residual**2)
+        
+        return pde_loss
+
     
     def compute_norm_loss(self, input_pts):
         # discrete squared integral needs to equal 1
@@ -214,6 +231,27 @@ class ev_pinn(nn.Module):
 
         return loss
     
+    def compute_loss_sw(self, input_pts, verbose=False):
+        input_pts.requires_grad = True
+        # xL = self.domain_extrema[0]
+        # xR = self.domain_extrema[1]
+        # f, E = self.solution(input_pts)
+        
+        pde_loss = self.compute_pde_loss_sw(input_pts)
+        norm_loss = self.compute_norm_loss(input_pts)
+
+        if len(self.eigenf_list) > 0:
+            ortho_loss = self.compute_ortho_loss_single(input_pts)       # suggest to focus on this one, computation not limiting
+            
+        else:
+            ortho_loss = torch.zeros(1)
+   
+        loss = ( pde_loss + norm_loss + ortho_loss ) 
+        if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| Norm Loss: ", round(torch.log10(norm_loss).item(), 4),
+                          "| Ortho loss: ",round(torch.log10(ortho_loss).item(), 4),  "| symmetry: ", self.solution.symmetry_switch )
+
+        return loss
+    
     def perturb_pts(self, input_pts, xL, xR):
         # assume input_pts to be evenly spaced as provided by training_pts
         delta_x = input_pts[1] - input_pts[0]
@@ -230,6 +268,13 @@ class ev_pinn(nn.Module):
         c = np.sqrt( 2 / L)
         lam = (np.pi * n / L )
         return c * torch.sin( lam  *  (pts + L/2)), lam**2
+    
+    def exact_sol_sw(self, input_pts):
+
+        # TODO
+
+
+        return 0
 
     def plotting(self, n=1):
         pts= self.add_points()
@@ -245,6 +290,20 @@ class ev_pinn(nn.Module):
         plt.plot(pts.detach(), - exact_f.detach(), label= f'Exact E: {excact_E}')
         plt.legend()
         plt.show()
+
+    def plotting_sw(self):
+        pts= self.add_points()
+        f, E = self.solution(pts)
+        E = round(E[0].item(), 4)
+
+        sw = self.potential_sw(pts)
+
+        plt.figure()
+        plt.plot(pts.detach(), f.detach(), label= f'Approximate E: {E}')
+        plt.plot(pts.detach(), sw.detach(), ls='-' ,label= f'SW Potential')
+        plt.legend()
+        plt.show()
+
     
     def fit_single_function(self, optimizer, epochs, rm_cond, loss_cond, verbose=False):
         #current hyper params
@@ -264,7 +323,8 @@ class ev_pinn(nn.Module):
                 def closure():
                     optimizer.zero_grad()
                     # loss = self.compute_loss(self.perturb_pts(self.training_pts, self.domain_extrema[0], self.domain_extrema[1]), verbose=verbose)
-                    loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
+                    # loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
+                    loss = self.compute_loss_sw(self.training_pts, verbose)
                     loss.backward()
                     history.append(loss.item())
                     return loss
@@ -282,7 +342,8 @@ class ev_pinn(nn.Module):
                     # eigenvalue = self.solution.ev_in(torch.ones(1))
                     # self.eigen_vals.append(solution.eigenvalue)
                     print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
-                    self.plotting(len(self.eigenf_list))
+                    self.plotting_sw()
+                    # self.plotting(len(self.eigenf_list))
                     # symmetry_change = not(self.solution.symmetry_switch)  #change symmetry for hard coding
                     del self.solution
                     self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
@@ -353,9 +414,12 @@ if __name__ == "__main__":
 
     # TODO: think values can be further optimized
     
-    rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
-    loss_cond_arr = [0.0012, 0.011, 0.075, 0.14]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
-    epochs_arr = [5000, 6500, 7000, 7000]
+    rm_cond_arr = [5e-3, 5e-3, 5e-3, 5e-3]
+    # rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
+    loss_cond_arr = [3, 10, 3, 3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
+    # loss_cond_arr = [0.0012, 0.011, 0.075, 0.14]
+    epochs_arr = [1000, 1000, 1000, 1000]
+    # epochs_arr = [5000, 6500, 7000, 7000]
 
     
     history =pinn.learn_eigenfunction_set(4, epochs_arr, rm_cond_arr, loss_cond_arr)
