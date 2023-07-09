@@ -358,7 +358,7 @@ if __name__ == "__main__":
     # TODO: think values can be further optimized
     
     rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
-    loss_cond_arr = [0.0012, 0.011, 0.075, 0.3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
+    loss_cond_arr = [0.0012, 0.05, 0.075, 0.3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
     epochs_arr = [5000, 6500, 7000, 7000]
 
     
