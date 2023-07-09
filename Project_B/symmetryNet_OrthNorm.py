@@ -165,31 +165,13 @@ class ev_pinn(nn.Module):
         return pde_loss
     
     
-    def compute_norm_loss(self, input_pts):
-        # discrete squared integral needs to equal 1
+    def OrthoNormLoss(self, input_pts):
         f, E = self.solution(input_pts)
-        xL = self.domain_extrema[0]
-        xR = self.domain_extrema[1]
-        norm_loss = abs(torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL))   # pow(2) also to ensure positive values
-        # norm_loss = abs(torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL))   # l1 loss
-        return norm_loss
-    
-    def compute_ortho_loss_sum(self, input_pts):
-        # ortho condition as in paper -> sum of all found eigenf
-        psi_eigen = torch.zeros(input_pts.size())
+        res= 0 
         for NN in self.eigenf_list:
-            psi_eigen += NN(input_pts)[0]
-        # ortho_loss = abs(torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze()))   # L1 loss
-        ortho_loss = abs(torch.dot(psi_eigen.squeeze(), self.solution(input_pts)[0].squeeze()))  
-        return  ortho_loss     
-    
-    def compute_ortho_loss_single(self, input_pts):
-        # alternative ortho cond -> dot product with each eigenf
-        res = 0
-        for NN in self.eigenf_list:
-            res += (torch.dot(NN(input_pts)[0].squeeze(), self.solution(input_pts)[0].squeeze())).pow(2)  #important to take absolute value or pow(2) here 
-        # return res/len(self.eigenf_list)
-        return res #/len(self.eigenf_list)       # if devide by len... othogonality constrain is relaxed for higher iterations
+            res += ((torch.dot(NN(input_pts)[0].squeeze(), f.squeeze()))).pow(2)
+        res += (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2)
+        return res  
 
     def compute_loss(self, input_pts, verbose=True):
         input_pts.requires_grad = True
@@ -198,38 +180,12 @@ class ev_pinn(nn.Module):
         f, E = self.solution(input_pts)
         
         pde_loss = self.compute_pde_loss(input_pts)
-        norm_loss = self.compute_norm_loss(input_pts)
-
-
-        if len(self.eigenf_list) > 0:
-            # ortho_loss = self.compute_ortho_loss_sum(input_pts)         # Not observing a big difference
-            ortho_loss = self.compute_ortho_loss_single(input_pts)       # suggest to focus on this one, computation not limiting
-            # small_eigvals =   (self.solution.eigenvalue - max(self.eigen_vals))**2  #penalize learning high eigenvalues
-            
-        else:
-            ortho_loss = torch.zeros(1)
-            # small_eigvals = (self.solution.eigenvalue)**2
+        orth_norm_loss = self.OrthoNormLoss(input_pts)
    
-        # loss = torch.log10( pde_loss + norm_loss + ortho_loss)  
-        
-        # reg_decay = len(self.eigenf_list)   
-        # not enough time to make this consistent with optimization. Idea was to decrease the regularization with number of eigenfunctions learned, but with current L =6 probably not necessary, as eigenvalues of similar magnitude
-        # loss = ( pde_loss + norm_loss + ortho_loss +(0.5**reg_decay) * small_eigvals)    
-        loss = ( pde_loss + norm_loss + ortho_loss ) 
-        if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| Norm Loss: ", round(torch.log10(norm_loss).item(), 4),
-                          "| Ortho loss: ",round(torch.log10(ortho_loss).item(), 4),  "| symmetry: ", self.solution.symmetry_switch )
+        loss = torch.log10( pde_loss + orth_norm_loss) 
+        if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| OrthoNorm Loss: ", round(torch.log10(orth_norm_loss).item(), 4), "| symmetry: ", self.solution.symmetry_switch )
 
         return loss
-    
-    def perturb_pts(self, input_pts, xL, xR):
-        # assume input_pts to be evenly spaced as provided by training_pts
-        delta_x = input_pts[1] - input_pts[0]
-        noise = torch.rand_like(input_pts) # uniform in [0,1)     
-        noise = (2*noise - 1)*delta_x/2*self.sigma     #noise should now be in [-delta_x/2, +delta_x/2) interval -> so order after perturbation of points shoul be conserved
-        input_pts = torch.clamp(input_pts + noise, min=xL, max=xR)  # should still lie in [xL, xR] range
-
-        return input_pts
-    
     
     def exact_solution(self,pts, n=1):
         #returns exact solution for free particle V=0:
@@ -254,15 +210,8 @@ class ev_pinn(nn.Module):
         plt.show()
     
     def fit_single_function(self, optimizer, epochs, rm_cond, loss_cond, verbose=False):
-        #current hyper params
-        window = 75
-        # exp_rm_threshold = -2   #if use beta in ADAM observed that can use eg -10 
-    
         history = []
-        ortho_counter = 0
-        # Setup logger
-
-
+        
         # Loop over epochs
         for epoch in range(epochs):
             # verbose = (epoch % 300  == 0)
@@ -270,29 +219,36 @@ class ev_pinn(nn.Module):
             
             def closure():
                 optimizer.zero_grad()
-                # loss = self.compute_loss(self.perturb_pts(self.training_pts, self.domain_extrema[0], self.domain_extrema[1]), verbose=verbose)
-                loss = self.compute_loss(self.training_pts, verbose)    #ToDo: Cheack wether pertubation helps learning ==> perturbation might suboptimal for orthogonality
+                loss = self.compute_loss(self.training_pts, verbose)   
                 loss.backward()
                 history.append(loss.item())
                 return loss
 
             optimizer.step(closure=closure)
+
             
-            #rolling mean for patience condition
-            if len(history) >= window+1:
-                rm = np.mean(np.array(history[-window:])-np.array(history[-window-1:-1]))
-            else:
-                rm = np.mean(np.array(history[1:])-np.array(history[:-1]))
-            
-            if abs(rm) < rm_cond and history[-1] < loss_cond:           # changed cndition from or to and
-                self.eigenf_list.append(copy.deepcopy(self.solution)) 
-                # eigenvalue = self.solution.ev_in(torch.ones(1))
-                # self.eigen_vals.append(solution.eigenvalue)
-                print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
-                self.plotting(len(self.eigenf_list))
-                # symmetry_change = not(self.solution.symmetry_switch)  #change symmetry for hard coding
-                del self.solution
-                self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
+ 
+            # if history[-1] < -2.5 and (epoch> 1000):          #some earliy termination cond. Especially meant for first eigenfunction
+            #     self.eigenf_list.append(copy.deepcopy(self.solution)) 
+            #     print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
+            #     self.plotting(len(self.eigenf_list))
+            #     del self.solution
+            #     self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
+            #                                         n_hidden_layers=0,
+            #                                         neurons=20,
+            #                                         regularization_param=0.,
+            #                                         regularization_exp=2.,
+            #                                         retrain_seed=42,
+            #                                         #   symmetry= symmetry_change
+            #                                         )
+            #     return history, epoch
+   
+
+        self.eigenf_list.append(copy.deepcopy(self.solution)) 
+        print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
+        self.plotting(len(self.eigenf_list))
+        del self.solution
+        self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
                                             n_hidden_layers=0,
                                             neurons=20,
                                             regularization_param=0.,
@@ -300,17 +256,10 @@ class ev_pinn(nn.Module):
                                             retrain_seed=42,
                                             #   symmetry= symmetry_change
                                             )
-                return history, epoch
-        
-        print(f'rm value: {rm} and loss {history[-1]}')
-        print(f'Termination condition not met') 
-        self.plotting()           
-        return -1, epoch
+        return history,  epoch
     
-    def learn_eigenfunction_set(self,no_of_eingen, epochs_arr, rm_cond_arr, loss_cond_arr, verbose= False):
+    def learn_eigenfunction_set(self,no_of_eingen, epochs_arr, verbose= False):
 
-        assert(len(rm_cond_arr)==no_of_eingen)
-        assert(len(loss_cond_arr)==no_of_eingen)
         assert(len(epochs_arr)==no_of_eingen)
 
         history = []
@@ -322,8 +271,8 @@ class ev_pinn(nn.Module):
 
             print('------- ', nsols_counter, ' -------')
 
-            betas = [0.999, 0.9999]
             optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=1e-3)
+            
             history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[nsols_counter], rm_cond_arr[nsols_counter], loss_cond_arr[nsols_counter],verbose= verbose)
 
             if history_n == -1:
@@ -339,7 +288,7 @@ def plot_hist(hist):
     plt.figure(dpi=150)
     plt.grid(True, which="both", ls=":")
     plt.plot(np.arange(1, len(hist) + 1), hist, label="Train Loss")
-    # plt.xscale("log")
+    plt.xscale("log")
     plt.legend()
     plt.show()
 
@@ -351,9 +300,9 @@ if __name__ == "__main__":
     batchsize = 10
     grid_resol = 100
     
-    a = 3
+    a = 2.8
     xL = -a; xR = a # shift with 0 into center in order to apply symmetry transformation
-    sigma = 0.5
+    # sigma = 0.5
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , sigma)
     
     # lr = 1e-2
@@ -363,11 +312,31 @@ if __name__ == "__main__":
     
     rm_cond_arr = [5e-5, 5e-5, 5e-5, 5e-5]
     loss_cond_arr = [0.0012, 0.05, 0.075, 0.3]    # TODO: 3rd sol should have lower error, also with 4th sol but there more expected...
-    epochs_arr = [5000, 6500, 7000, 7000]
+    epochs_arr = [1100, 2000, 3000, 5000]
+    # epochs_arr = [50, 65, 70, 70]
+    # epochs_arr = [5000, 6500, 7000, 7000, 7000, 7000, 7000, 7000]
 
     
-    history =pinn.learn_eigenfunction_set(4, epochs_arr, rm_cond_arr, loss_cond_arr)
+    history =pinn.learn_eigenfunction_set(4, epochs_arr, verbose=False)
     
     plot_hist(history)
 
+
+
 # %%
+
+
+
+
+
+
+
+
+    # def perturb_pts(self, input_pts, xL, xR):
+    #     # assume input_pts to be evenly spaced as provided by training_pts
+    #     delta_x = input_pts[1] - input_pts[0]
+    #     noise = torch.rand_like(input_pts) # uniform in [0,1)     
+    #     noise = (2*noise - 1)*delta_x/2*self.sigma     #noise should now be in [-delta_x/2, +delta_x/2) interval -> so order after perturbation of points shoul be conserved
+    #     input_pts = torch.clamp(input_pts + noise, min=xL, max=xR)  # should still lie in [xL, xR] range
+
+    #     return input_pts

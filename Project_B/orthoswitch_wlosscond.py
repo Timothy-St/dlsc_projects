@@ -1,3 +1,4 @@
+#%%
 import torch
 import torch.nn as nn
 import numpy as np
@@ -359,8 +360,10 @@ class ev_pinn(nn.Module):
             ortho_counter += 1          # if termination cond not satisfied after epoch loop try with opposite symmetry
             self.solution.symmetry_switch = not self.solution.symmetry_switch
             print(f'rm value: {rm} and loss {history[-1]}')
+            print(f'Termination condition not met') 
+            self.plotting()
             
-        print(f'Termination condition not met')            
+             
         return -1, epoch
     
     def learn_eigenfunction_set(self,no_of_eingen, epochs_arr, rm_cond_arr, loss_cond_arr, verbose= False):
@@ -377,7 +380,8 @@ class ev_pinn(nn.Module):
         while nsols_counter < no_of_eingen:
 
             print('------- ', nsols_counter, ' -------')
-
+            
+            betas = [0.999, 0.9999]
             optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=1e-3)
             history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[nsols_counter], rm_cond_arr[nsols_counter], loss_cond_arr[nsols_counter],verbose= verbose)
 
@@ -398,6 +402,8 @@ def plot_hist(hist):
     plt.legend()
     plt.show()
 
+
+#%%
 if __name__ == "__main__":
     neurons = 20
     retrain_seed = 42
@@ -425,3 +431,4 @@ if __name__ == "__main__":
     history =pinn.learn_eigenfunction_set(4, epochs_arr, rm_cond_arr, loss_cond_arr)
     
     plot_hist(history)
+# %%
