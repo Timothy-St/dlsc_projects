@@ -11,10 +11,14 @@ import math
 import copy
 import logging
 
-### this has the original orto switch in it. I also added weight decay to adam. it learns until it reached n_sols even if did not satisfy loss_cond.
+### Norm and ortho loss now fused in OrthoNormLoss
+### added passage test after e.g. 1200 epochs (hyperparameter). If failed, learned function reinitialized
+### first learned function is now symmetric, rest is symmetry is learned
 
-### TODO: 1) still need better way to avoid learning high eigenvalues...
-###       2) optimize values for n_epochs and loss_conditions further
+### observed most stable outcome with 5 neurons and one hidden layer so far. Only collected twice data, but it allready seemed good.
+### most limiting fucntion actually seems to be first. Quality of seems to fluctuate quite a bit. If i was unsatified immediatly aborted script and started
+### again. Quality of other functions more consitent. For 3 and 4 function went up to 15000 epochs and obtained better results for them and did not observe over fitting.
+
 
 
 class sin_wrapper(nn.Module):
@@ -85,10 +89,6 @@ class SymmetrySwitchNet(nn.Module):
         for k, l in enumerate(self.hidden_layers):
             x_neg = self.activation(l(x_neg))
             x = self.activation(l(x))
-
-        # possible residual connection -> does not seem to give better results, but could be useful when look at generalisations
-        # x = self.activation(self.res_layer(torch.cat((x,eigenvalue), 1)))
-        # x_neg = self.activation(self.res_layer(torch.cat((x_neg,eigenvalue), 1)))
         
         x_neg_out= self.activation(self.output(x_neg))
         x_out= self.activation(self.output(x))
@@ -120,7 +120,7 @@ class ev_pinn(nn.Module):
 
         
         self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
-                                              n_hidden_layers=h_layer,
+                                              n_hidden_layers=1,
                                               neurons=20,
                                               regularization_param=0.,
                                               regularization_exp=2.,
@@ -209,7 +209,7 @@ class ev_pinn(nn.Module):
         plt.legend()
         plt.show()
     
-    def fit_single_function(self, optimizer, epochs, rm_cond, loss_cond, verbose=False):
+    def fit_single_function(self, optimizer, epochs, verbose=False):
         history = []
         
         # Loop over epochs
@@ -226,22 +226,23 @@ class ev_pinn(nn.Module):
 
             optimizer.step(closure=closure)
 
-            
- 
-            # if history[-1] < -2.5 and (epoch> 1000):          #some earliy termination cond. Especially meant for first eigenfunction
-            #     self.eigenf_list.append(copy.deepcopy(self.solution)) 
-            #     print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
-            #     self.plotting(len(self.eigenf_list))
-            #     del self.solution
-            #     self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
-            #                                         n_hidden_layers=0,
-            #                                         neurons=20,
-            #                                         regularization_param=0.,
-            #                                         regularization_exp=2.,
-            #                                         retrain_seed=42,
-            #                                         #   symmetry= symmetry_change
-            #                                         )
-            #     return history, epoch
+            # Passage test
+            if epoch == epoch_test:
+                if history[-1] > loss_passage:
+                    print("Failed passage test with loss ", history[-1])
+                    self.plotting(len(self.eigenf_list) +1)   #plot to analyze if aborted correctly
+                    print("Reinitializing")
+                    del self.solution
+                    self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
+                                        n_hidden_layers=h_layer,
+                                        neurons=20,
+                                        regularization_param=0.,
+                                        regularization_exp=2.,
+                                        retrain_seed=42,
+                                        symmetry= False #now always learn the symmetry
+                                        )   
+                    
+                    return -1, epoch
    
 
         self.eigenf_list.append(copy.deepcopy(self.solution)) 
@@ -274,7 +275,7 @@ class ev_pinn(nn.Module):
 
             optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=1e-3)
             
-            history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[nsols_counter], rm_cond_arr[nsols_counter], loss_cond_arr[nsols_counter],verbose= verbose)
+            history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[nsols_counter], verbose= verbose)
 
             if history_n == -1:
                 continue
@@ -312,40 +313,63 @@ if __name__ == "__main__":
     
     a = 3
     xL = -a; xR = a # shift with 0 into center in order to apply symmetry transformation
-    # sigma = 0.5
+    sigma = 0.5
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , sigma)
     
-    # lr = 1e-2
-    betas = [0.999, 0.9999]
+    # Passage test parameters
+    epoch_test= 1200      # tune when working with bigger NN to avoid f.e. learning higher eigenfunctions
+    loss_passage = 0
 
-      
-    epochs_arr = [1500, 5000, 7000, 7000]
-    
-    # epochs_arr = epoch_ar(500,4)
+    epochs_arr = [1000, 6500, 15000, 150000]
 
-
-    
     history =pinn.learn_eigenfunction_set(4, epochs_arr, verbose=False)
     
-    plot_hist(history)
 
 
 
 # %%
 
-pinn.plotting(n=5)
+# Data analysis section
+
+def compute_errors(NN, n): 
+    # returns relative eigen value and function error
+    pts = pinn.add_points()
+    exact_func, exact_E = pinn.exact_solution(pts,n)
+    aprox_func, approx_E = NN(pts)
+    
+    exact_func = exact_func.detach().numpy()
+    aprox_func, approx_E = aprox_func.detach().numpy(), approx_E.detach().numpy()[0]
+    
+    MSE_1 = np.square((exact_func - aprox_func)).mean()
+    MSE_2 = np.square((-exact_func - aprox_func)).mean()  #+- coeffcient 
+    
+    MSE = min(MSE_1, MSE_2) / max(abs(exact_func))  # relative to highest absolute value of exact sol
+    
+    error_E = abs((exact_E - approx_E) / exact_E)
+    error_MSE = float(MSE)
+    
+    error_E_exp = "{:.2e}".format(float(error_E))
+    error_MSE_exp = "{:.2e}".format(float(error_MSE))
+    
+    return error_E_exp, error_MSE_exp
+    
+    
+
+eigenvals = []
+
+# get list of eigenvalues and sorted list arguments
+for NN in pinn.eigenf_list:
+    lambda_i = (NN.ev_in( torch.ones(1))).item() 
+    eigenvals.append(lambda_i)
+sort_arg = np.argsort(eigenvals)
+
+print("##### Data analysis #####################")
+print("_____ :  E error   : func error")
+for n,i in enumerate(sort_arg):
+    NN = pinn.eigenf_list[i]
+    error_E, error_func = compute_errors(NN, n+1)
+    print( f'n = {n} : ', error_E," : ", error_func)
+print("#########################################")
+    
 
 
-
-
-
-
-    # def perturb_pts(self, input_pts, xL, xR):
-    #     # assume input_pts to be evenly spaced as provided by training_pts
-    #     delta_x = input_pts[1] - input_pts[0]
-    #     noise = torch.rand_like(input_pts) # uniform in [0,1)     
-    #     noise = (2*noise - 1)*delta_x/2*self.sigma     #noise should now be in [-delta_x/2, +delta_x/2) interval -> so order after perturbation of points shoul be conserved
-    #     input_pts = torch.clamp(input_pts + noise, min=xL, max=xR)  # should still lie in [xL, xR] range
-
-    #     return input_pts
-# %%
