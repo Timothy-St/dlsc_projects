@@ -243,7 +243,10 @@ class ev_pinn(nn.Module):
                                         )   
                     
                     return -1, epoch
-   
+
+            if len(self.eigenf_list)==0 and  history[-1] < -2.5:
+                continue
+            
 
         self.eigenf_list.append(copy.deepcopy(self.solution)) 
         print(f'Found solution {len(self.eigenf_list)} at epoch {epoch} with loss {history[-1]}')
@@ -320,7 +323,7 @@ if __name__ == "__main__":
     epoch_test= 1200      # tune when working with bigger NN to avoid f.e. learning higher eigenfunctions
     loss_passage = 0
 
-    epochs_arr = [1000, 6500, 15000, 150000]
+    epochs_arr = [1400, 6500, 15000, 150000]
 
     history =pinn.learn_eigenfunction_set(4, epochs_arr, verbose=False)
     
