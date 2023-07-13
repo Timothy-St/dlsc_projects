@@ -69,9 +69,12 @@ class SymmetrySwitchNet(nn.Module):
         L = xR- xL
         
         fb = 0.0    # offset if needed
-        g= torch.cos(np.pi/L  * input_pts)   #preserves symmetry 
+        g= 1*torch.cos(np.pi/L  * input_pts)   #preserves symmetry 
+        # g = (1- torch.exp(-(input_pts + xL)))* (1 - torch.exp(input_pts - xL))  # symmetric, assumes xL = -xR 
         
         return fb + g*NN_output
+    
+    
      
         
     def forward(self, input_pts):
@@ -158,6 +161,8 @@ class ev_pinn(nn.Module):
         grad_f_x = torch.autograd.grad(f.sum(), input_pts, create_graph=True)[0]   
         grad_f_xx = torch.autograd.grad(grad_f_x.sum(), input_pts, create_graph=True)[0]
         
+        
+        
         # calculate pde loss
         pde_residual = grad_f_xx +  E *f   #   (E - V)*f    
         pde_loss = torch.mean(pde_residual**2)
@@ -170,6 +175,8 @@ class ev_pinn(nn.Module):
         res= 0 
         for NN in self.eigenf_list:
             res += ((torch.dot(NN(input_pts)[0].squeeze(), f.squeeze()))).pow(2)
+            # res += (torch.dot(NN(input_pts)[0].squeeze(), f.squeeze()))          # uncommend for summation ortho loss 
+        # res = res**2
         res += (torch.dot(f.squeeze(),f.squeeze()) - self.grid_resol/(xR - xL)).pow(2)
         return res
 
@@ -181,6 +188,7 @@ class ev_pinn(nn.Module):
         
         pde_loss = self.compute_pde_loss(input_pts)
         orth_norm_loss = self.OrthoNormLoss(input_pts)
+        
    
         loss = torch.log10( pde_loss + orth_norm_loss) 
         if verbose: print("Total loss: ", round(loss.item(), 4), "| PDE Loss: ", round(torch.log10(pde_loss).item(), 4), "| OrthoNorm Loss: ", round(torch.log10(orth_norm_loss).item(), 4), "| symmetry: ", self.solution.symmetry_switch )
@@ -209,7 +217,7 @@ class ev_pinn(nn.Module):
         plt.legend()
         plt.show()
     
-    def fit_single_function(self, optimizer, epochs, verbose=False):
+    def fit_single_function(self, optimizer, epochs,neurons, verbose=False):
         history = []
         
         # Loop over epochs
@@ -231,11 +239,12 @@ class ev_pinn(nn.Module):
                 if history[-1] > loss_passage:
                     print("Failed passage test with loss ", history[-1])
                     self.plotting(len(self.eigenf_list) +1)   #plot to analyze if aborted correctly
+                    plot_hist(history)
                     print("Reinitializing")
                     del self.solution
                     self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
                                         n_hidden_layers=h_layer,
-                                        neurons=20,
+                                        neurons=neurons,
                                         regularization_param=0.,
                                         regularization_exp=2.,
                                         retrain_seed=42,
@@ -244,7 +253,7 @@ class ev_pinn(nn.Module):
                     
                     return -1, epoch
 
-            if len(self.eigenf_list)==0 and  history[-1] < -3.:
+            if len(self.eigenf_list)==0  and history[-1] < -5.5:    # uncommend for fast ground state learning
                 break # exit for loop
             
 
@@ -254,7 +263,7 @@ class ev_pinn(nn.Module):
         del self.solution
         self.solution = SymmetrySwitchNet(self.activation, self.domain_extrema, input_dimension=1, output_dimension=1,
                                             n_hidden_layers=h_layer,
-                                            neurons=20,
+                                            neurons=neurons,
                                             regularization_param=0.,
                                             regularization_exp=2.,
                                             retrain_seed=42,
@@ -271,14 +280,14 @@ class ev_pinn(nn.Module):
         iterations = []
 
         nsols_counter = 0
-
+        
         while nsols_counter < no_of_eingen: # substituted while for for-loop st get nsols even if dont meet termination cond in some cases...
 
             print('------- ', nsols_counter, ' -------')
 
-            optimizer = optim.Adam(self.parameters(), lr=1e-3, weight_decay=1e-3)
+            optimizer = optim.Adam(self.parameters(), lr= lr_arr[nsols_counter], weight_decay=weight_decay_arr[nsols_counter], betas=betas)
             
-            history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[nsols_counter], verbose= verbose)
+            history_n , epochs_needed =self.fit_single_function(optimizer,epochs_arr[nsols_counter], neurons[nsols_counter], verbose= verbose)
 
             if history_n == -1:
                 continue
@@ -296,6 +305,14 @@ def plot_hist(hist):
     plt.xscale("log")
     plt.legend()
     plt.show()
+    
+def plot_hist_not_log(hist):
+    plt.figure(dpi=80)
+    plt.grid(True, which="both", ls=":")
+    plt.plot(np.arange(1, len(hist) + 1), hist, label="Train Loss")
+    # plt.xscale("log")
+    plt.legend()
+    plt.show()
 
 
 def epoch_ar(base, n):
@@ -307,27 +324,33 @@ def epoch_ar(base, n):
 
 #%%
 if __name__ == "__main__":
-    neurons = 5
-    h_layer = 1
     
+    h_layer = 2
     retrain_seed = 42
-    batchsize = 10
+    batchsize = 1
     grid_resol = 100
     
-    a = 3
+    a = 6
     xL = -a; xR = a # shift with 0 into center in order to apply symmetry transformation
     sigma = 0.5
     pinn = ev_pinn(neurons, xL, xR, grid_resol, batchsize, retrain_seed , sigma)
     
     # Passage test parameters
-    epoch_test= 1200      # tune when working with bigger NN to avoid f.e. learning higher eigenfunctions
+    epoch_test= 1000      #  to avoid f.e. learning higher eigenfunctions/ nonphysical local minima 
     loss_passage = 0
 
-    epochs_arr = [5000, 25000, 25000, 250000]
+
+    # traing hyperparameter
+    epochs_arr = [20000, 20000, 20000, 20000]
+    lr_arr = [1e-4,1e-3,1e-3,1e-3]
+    weight_decay_arr = [1e-3,1e-3,1e-3,1e-3] 
+    neurons_arr = [3,3,3,3]
+    betas = [0.9, 0.999]  
 
     history =pinn.learn_eigenfunction_set(4, epochs_arr, verbose=False)
-    # added immediate train stop if loss < -3  to find good ground state
 
+    plot_hist(history)
+    plot_hist_not_log(history)
 
 
 # %%
