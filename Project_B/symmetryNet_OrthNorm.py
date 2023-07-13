@@ -244,8 +244,8 @@ class ev_pinn(nn.Module):
                     
                     return -1, epoch
 
-            if len(self.eigenf_list)==0 and  history[-1] < -2.5:
-                continue
+            if len(self.eigenf_list)==0 and  history[-1] < -3.:
+                break # exit for loop
             
 
         self.eigenf_list.append(copy.deepcopy(self.solution)) 
@@ -323,10 +323,10 @@ if __name__ == "__main__":
     epoch_test= 1200      # tune when working with bigger NN to avoid f.e. learning higher eigenfunctions
     loss_passage = 0
 
-    epochs_arr = [1400, 6500, 15000, 150000]
+    epochs_arr = [5000, 25000, 25000, 250000]
 
     history =pinn.learn_eigenfunction_set(4, epochs_arr, verbose=False)
-    
+    # added immediate train stop if loss < -3  to find good ground state
 
 
 
@@ -376,3 +376,5 @@ print("#########################################")
     
 
 
+
+# %%
